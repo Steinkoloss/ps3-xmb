@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 from cg import Program
 from import_firmware import PARTICLES_SHA256, PUP_SHA256, RENDERER_SHA256, SPLINE_SHA256
 from qrc import resources
+from spu_elf import load
 
 
 @unittest.skipUnless(os.environ.get("MOYOU_REFERENCE"), "Set MOYOU_REFERENCE to the local firmware import")
@@ -65,6 +66,18 @@ class OriginalInputTests(unittest.TestCase):
                         self.assertTrue(any(i.offset + 16 == offset and i.constant_bits
                                             for i in program.instructions))
         self.assertEqual(inventory, {7003: 11, 7004: 47})
+
+    def test_simulation_sections_keep_original_code_separate_from_resource_data(self):
+        for name, end in (("moyou/spline/spline", 0x8758), ("particles/particles/particles", 0xA9E8)):
+            with self.subTest(name=name):
+                data = (self.root / f"lines/spurs/{name}.elf").read_bytes()
+                image = load(data)
+                self.assertEqual(image.entry, 0x3070)
+                self.assertEqual(len(image.memory), 256 * 1024)
+                self.assertEqual(image.executable[-1][1], end)
+                for length in (0, 51, len(data) - 1):
+                    with self.subTest(length=length), self.assertRaises(ValueError):
+                        load(data[:length])
 
 
 if __name__ == "__main__":
