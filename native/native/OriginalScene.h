@@ -8,6 +8,8 @@ public:
                     OriginalSimulation::Constants constants, unsigned month, double hour);
     // Month 1-12; hour 0-24, or negative for the preset's fixed hour.
     void setTime(unsigned month, double hour);
+    // Firmware draws the glint pass (draw mask bit 1); off hides it.
+    void setGlints(bool enabled) { glints_ = enabled; }
     void show(const OriginalSimulation::Frame& frame, QSize size);
     void render(GLuint target, QSize size) { display_->render(target,size); }
     QImage capture(QSize size);
@@ -19,6 +21,7 @@ private:
     std::map<QString,float> line_, background_, hdr_;
     unsigned month_ = 0;
     double hour_ = 0;
+    bool glints_ = true;
     std::unique_ptr<Renderer> display_;
 };
 

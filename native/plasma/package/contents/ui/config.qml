@@ -10,12 +10,13 @@ Kirigami.FormLayout {
     property alias cfg_Month: month.value
     property alias cfg_Hour: hour.value
     property int cfg_FrameRate
+    property alias cfg_Glints: glints.checked
     property alias formLayout: root
 
     QQC2.ComboBox {
         Kirigami.FormData.label: "Scene set:"
-        readonly property var values: ["", "day", "night", "yoake", "higure"]
-        model: ["Default", "Day", "Night", "Dawn (yoake)", "Dusk (higure)"]
+        readonly property var values: ["day", "night", "yoake", "higure"]
+        model: ["Day", "Night", "Dawn (yoake)", "Dusk (higure)"]
         currentIndex: Math.max(0, values.indexOf(root.cfg_Preset))
         onActivated: index => root.cfg_Preset = values[index]
     }
@@ -30,6 +31,11 @@ Kirigami.FormLayout {
         model: ["60 fps", "30 fps (saves CPU)"]
         currentIndex: root.cfg_FrameRate === 30 ? 1 : 0
         onActivated: index => root.cfg_FrameRate = index === 1 ? 30 : 60
+    }
+    QQC2.CheckBox {
+        id: glints
+        Kirigami.FormData.label: "Glints:"
+        text: "Draw the glint pass (experimental)"
     }
     QQC2.SpinBox {
         id: hour

@@ -6,8 +6,8 @@
   <kcfgfile name=""/>
   <group name="General">
     <entry name="Preset" type="String">
-      <label>Original override set: empty, day, night, yoake or higure</label>
-      <default></default>
+      <label>Original override set: day, night, yoake or higure</label>
+      <default>day</default>
     </entry>
     <entry name="Month" type="Int">
       <label>Month colour 1-12, or 0 to follow the calendar</label>
@@ -20,6 +20,10 @@
     <entry name="FrameRate" type="Int">
       <label>Updates per second: 60, or 30 to halve CPU use</label>
       <default>60</default>
+    </entry>
+    <entry name="Glints" type="Bool">
+      <label>Draw the original glint pass (halos currently larger than on the console)</label>
+      <default>false</default>
     </entry>
   </group>
 </kcfg>

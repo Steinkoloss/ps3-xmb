@@ -166,7 +166,7 @@ void OriginalDisplay::show(const OriginalSimulation::Frame& frame, QSize size) {
     display_->particles(frame.particles);
     if (frame.particles.empty()) return;
     const auto& u = frame.particleUniforms;
-    display_->particleMask(u.passes);
+    display_->particleMask(glints_ ? u.passes : u.passes & ~2u);
     const auto array = [](const auto& values, int count) { QJsonArray out; for (int i = 0; i < count; ++i) out.append(values[i]); return out; };
     // RSX matrix parameters are rows; vectormath memory is column-major.
     const auto rows = [](const RopeSolver::Matrix& columns) {

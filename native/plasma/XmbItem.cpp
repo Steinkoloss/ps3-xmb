@@ -127,6 +127,7 @@ public:
         if (channel != channel_) { channel_ = std::move(channel); display_.reset(); shown_ = 0; failed_ = false; }
         month_ = item->month();
         hour_ = item->hour();
+        glints_ = item->glints();
     }
     QOpenGLFramebufferObject* createFramebufferObject(const QSize& size) override {
         QOpenGLFramebufferObjectFormat format;
@@ -180,6 +181,7 @@ private:
             monthShown_ = month; hourShown_ = hour;
             if (!frame.vertices.empty()) shown_ = 0;
         }
+        display_->setGlints(glints_);
         if (!frame.vertices.empty()) { display_->show(frame,size); shown_ = id; }
         else if (!shown_) return false;
         display_->render(framebufferObject()->handle(),size);
@@ -192,7 +194,7 @@ private:
     double hour_ = -1;
     unsigned monthShown_ = 0;
     double hourShown_ = 0;
-    bool failed_ = false;
+    bool failed_ = false, glints_ = false;
 };
 }
 
@@ -234,6 +236,13 @@ void XmbItem::setFrameRate(int rate) {
     emit frameRateChanged();
 }
 
+void XmbItem::setGlints(bool enabled) {
+    if (enabled == glints_) return;
+    glints_ = enabled;
+    emit glintsChanged();
+    update();
+}
+
 void XmbItem::componentComplete() {
     QQuickFramebufferObject::componentComplete();
     restart();
@@ -254,7 +263,9 @@ void XmbItem::restart() {
     auto data = dataDirectory_;
     if (data.isEmpty()) data = QStandardPaths::locate(QStandardPaths::GenericDataLocation,"ps3-xmb",QStandardPaths::LocateDirectory);
     if (data.isEmpty()) { fail("Install the local firmware-derived data to ~/.local/share/ps3-xmb"); return; }
-    simulator_ = std::make_unique<XmbSimulator>(this,data,preset_);
+    // The base menus lack the background's day/night entries; the console always applies a
+    // set, so an unset preset means the day set.
+    simulator_ = std::make_unique<XmbSimulator>(this,data,preset_.isEmpty() ? QStringLiteral("day") : preset_);
     const auto ratio = window() ? window()->effectiveDevicePixelRatio() : 1.0;
     simulator_->setSize((size() * ratio).toSize());
     simulator_->setRunning(running_);

@@ -3,7 +3,7 @@
 #   data    -> ~/.local/share/ps3-xmb          (firmware-derived; local only)
 #   module  -> ~/.local/lib/qt6/qml/PS3Xmb
 #   package -> ~/.local/share/plasma/wallpapers/org.ps3xmb.waves
-#   env     -> ~/.config/plasma-workspace/env/ps3-xmb.sh (adds the module path at login)
+#   env     -> ~/.config/environment.d/ps3-xmb.conf (module path for the plasmashell service)
 set -e
 root=$(cd "$(dirname "$0")/../.." && pwd)
 work=$root/build/work
@@ -32,9 +32,12 @@ else
     kpackagetool6 --type Plasma/Wallpaper --install "$package"
 fi
 
-env=${XDG_CONFIG_HOME:-$HOME/.config}/plasma-workspace/env
-mkdir -p "$env"
-printf 'export QML_IMPORT_PATH="%s${QML_IMPORT_PATH:+:$QML_IMPORT_PATH}"\n' "$qml" > "$env/ps3-xmb.sh"
+# plasmashell runs as a systemd user service: environment.d reaches it on every start.
+environment=${XDG_CONFIG_HOME:-$HOME/.config}/environment.d
+mkdir -p "$environment"
+printf 'QML_IMPORT_PATH=%s\n' "$qml" > "$environment/ps3-xmb.conf"
+rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/plasma-workspace/env/ps3-xmb.sh"
+systemctl --user set-environment QML_IMPORT_PATH="$qml" 2>/dev/null || true
 
-echo "Installed. Log out and back in (or restart plasmashell with QML_IMPORT_PATH=$qml),"
+echo "Installed. Restart plasmashell (systemctl --user restart plasma-plasmashell) or log in again,"
 echo "then pick 'PS3 XMB Waves' under Desktop and Wallpaper."

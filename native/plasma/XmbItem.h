@@ -22,6 +22,8 @@ class XmbItem : public QQuickFramebufferObject {
     Q_PROPERTY(bool running READ running WRITE setRunning NOTIFY runningChanged)
     // Simulation updates per second (1-60); the simulation itself stays real-time.
     Q_PROPERTY(int frameRate READ frameRate WRITE setFrameRate NOTIFY frameRateChanged)
+    // Original glint pass; its halos are currently larger than on the console.
+    Q_PROPERTY(bool glints READ glints WRITE setGlints NOTIFY glintsChanged)
     Q_PROPERTY(QString error READ error NOTIFY errorChanged)
 public:
     explicit XmbItem(QQuickItem* parent = nullptr);
@@ -39,6 +41,8 @@ public:
     bool running() const { return running_; }
     void setRunning(bool running);
     int frameRate() const { return frameRate_; }
+    bool glints() const { return glints_; }
+    void setGlints(bool enabled);
     void setFrameRate(int rate);
     QString error() const { return error_; }
 
@@ -49,6 +53,7 @@ signals:
     void timeChanged();
     void runningChanged();
     void frameRateChanged();
+    void glintsChanged();
     void errorChanged();
 protected:
     void componentComplete() override;
@@ -60,5 +65,6 @@ private:
     double hour_ = -1;
     bool running_ = true;
     int frameRate_ = 60;
+    bool glints_ = false;
     std::unique_ptr<XmbSimulator> simulator_;
 };
