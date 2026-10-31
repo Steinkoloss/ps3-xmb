@@ -252,6 +252,31 @@ void ps3_hle_call(unsigned nid, ppu_context* ctx) {
         ctx->fpr[1] = float(randomState >> 8) / float(1 << 23) - 1.0f;
         return;
     case 0xd15d6a2c: ctx->gpr[3] = ticks; return;
+    case 0xab37ac81: case 0x91d4236f:   // matrix uniform set: keep the value in the uniform object
+        check(ctx->gpr[3] + 0x10, 64, true); check(ctx->gpr[4], 64);
+        std::memcpy(vm_base + ctx->gpr[3] + 0x10, vm_base + ctx->gpr[4], 64);
+        return;
+    case 0x0e428679: {                  // Matrix4 inverse; only reached for the identity view
+        check(ctx->gpr[3], 64, true); check(ctx->gpr[4], 64);
+        static constexpr float identity[16] = {1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
+        for (unsigned i = 0; i < 16; ++i)
+            if (readFloat(ctx->gpr[4] + i * 4) != identity[i]) throw std::runtime_error("Unadapted original matrix inverse");
+        std::memmove(vm_base + ctx->gpr[3], vm_base + ctx->gpr[4], 64);
+        return;
+    }
+    // Particle draw submission (texture/vertex binding, state, draw): the native renderer draws.
+    case 0x58ce6d93: case 0x5d4e8794: case 0x7adfc9b9: case 0xfa6d4f6f: case 0x17427a25: case 0x0c3b402a:
+    case 0xd9f235f2: case 0x21b94163: case 0x84d310d3: case 0x1af503ef: case 0xa07ee0e6: case 0x15b229db:
+    case 0x2ecddceb: case 0x56c4aefe: case 0x5f9b0f4b: case 0x8cf83e4a: case 0xb41d0556: case 0xdcc86364:
+    case 0xea37227c: case 0xf3a17538: case 0xf679d0d7: case 0xf8be4852: case 0x476a66ad:
+        return;
+    case 0x2e5d5ba2: {                  // quaternion of the (identity) camera rotation
+        check(ctx->gpr[3], 16, true);
+        for (unsigned i = 0; i < 16; ++i)
+            if (readFloat(ctx->gpr[4] + i * 4) != (i % 5 ? 0.0f : 1.0f)) throw std::runtime_error("Unadapted original camera rotation");
+        for (unsigned i = 0; i < 4; ++i) writeFloat(ctx->gpr[3] + i * 4, i == 3 ? 1.0f : 0.0f);
+        return;
+    }
     case 0xc2c9c741:                     // Matrix3 from the camera basis rows (identity view here)
         check(ctx->gpr[3], 48, true);
         for (unsigned i = 0; i < 3; ++i) std::memcpy(vm_base + ctx->gpr[3] + i * 16, &ctx->vr[2 + i], 16);
@@ -488,6 +513,48 @@ void RopeSolver::emitParticles(uint32_t layer, const std::vector<std::array<floa
     ++ticks;
 }
 
+RopeSolver::ParticleUniforms RopeSolver::particleUniforms(uint32_t system, unsigned pass) {
+    auto& cpu = state_->cpu;
+    // qgl context (unrelocated global 0x34) with one identity modelview and its cached inverse.
+    if (!vm_read32(0x34)) {
+        const auto context = particleAllocate(0x400, 16), entry = particleAllocate(0x100, 16);
+        for (unsigned i = 0; i < 4; ++i) { writeFloat(entry + i * 20, 1); writeFloat(entry + 0x40 + i * 20, 1); }
+        vm_write8(entry + 0x80, 1);
+        vm_write32(context + 0x48 + 4, entry);
+        vm_write32(context + 0x48 + 0x10, 1);
+        vm_write32(0x34, context);
+    }
+    const auto vertex = particleAllocate(0x400, 16), fragment = particleAllocate(0x400, 16), handles = particleAllocate(16, 16);
+    vm_write32(handles, vertex);
+    vm_write32(handles + 4, fragment);
+    // Unbound uniform objects (binding record +0xc == 0): setters keep values, skip uploads.
+    const auto unbound = particleAllocate(0x40, 16);
+    for (uint32_t offset : {0x30u,0x90u,0xf0u,0x150u,0x180u,0x1e0u,0x210u,0x240u,0x270u,0x2a0u,0x2d0u,0x300u,0x330u,0x360u})
+        vm_write32(vertex + offset + 4, unbound);
+    for (uint32_t offset : {0x30u,0x50u,0xb0u,0xe0u,0x100u,0x160u,0x190u}) vm_write32(fragment + offset + 4, unbound);
+    cpu.gpr[3] = system;
+    cpu.gpr[4] = handles;
+    cpu.gpr[5] = handles + 4;
+    moyou_rope_func_0205C254(&cpu); drain(&cpu);
+    ParticleUniforms uniforms;
+    const auto vector = [&](uint32_t object) { Vector v; for (unsigned i = 0; i < 4; ++i) v[i] = readFloat(object + 0x10 + i * 4); return v; };
+    const auto matrix = [&](uint32_t object) { Matrix m; for (unsigned i = 0; i < 16; ++i) m[i] = readFloat(object + 0x10 + i * 4); return m; };
+    uniforms.camera = matrix(vertex + 0xf0);
+    uniforms.lightPack = matrix(vertex + 0x180);
+    for (const auto& [name, offset] : std::initializer_list<std::pair<const char*, uint32_t>>{
+            {"_ParticleSize",0x150},{"_Transparency",0x1e0},{"_Focus",0x210},{"_FocusCurves",0x240},
+            {"_FrontFacingQuaternion",0x270},{"_NearControl",0x2a0},{"_LifeBoundsMin",0x2d0},
+            {"_LifeBoundsMax",0x300},{"_Darkness",0x330},{"_Glare",0x360}})
+        uniforms.vertex[name] = vector(vertex + offset);
+    uniforms.fragmentLightPack = matrix(fragment + 0x50);
+    uniforms.fragment["_Color"] = vector(fragment + 0xb0);
+    uniforms.fragment[pass == 0 ? "_NearControl" : "_Glare"] = vector(fragment + 0x100);
+    uniforms.fragment["_Gamma"] = {readFloat(fragment + 0xe0 + 0xc - 0x10 + 0x10),0,0,0};
+    uniforms.fragment["_IridescentExp"] = {readFloat(fragment + 0x190 + 0xc),0,0,0};
+    uniforms.passes = (vm_read32(system + 0x1484) + 1) & 3;
+    return uniforms;
+}
+
 unsigned RopeSolver::stepParticles(uint32_t system, float seconds) {
     auto& cpu = state_->cpu;
     // ParticlesLayer frame (0x02031f44): live block from the menu copy, then the PPU path.
@@ -502,8 +569,20 @@ uint32_t RopeSolver::guestWord(uint32_t address) const { return vm_read32(addres
 
 std::vector<float> RopeSolver::particleVertices(uint32_t system) const {
     const auto count = vm_read32(system + 0x16fc), buffer = vertexBuffers[1 - vm_read32(system + 0x16f4)];
+    // Record (0x0205d7b0, attribute setup 0x0205e5c8): float4 position+size, half4 rotation
+    // (attribute 11), half4 previous position (attribute 10, unused by the programs).
+    const auto half = [](uint16_t bits) {
+        const uint32_t sign = uint32_t(bits & 0x8000) << 16, exponent = (bits >> 10) & 0x1f, mantissa = bits & 0x3ff;
+        if (!exponent) return (bits & 0x8000 ? -1.0f : 1.0f) * std::ldexp(float(mantissa), -24);
+        if (exponent == 31) return std::bit_cast<float>(sign | 0x7f800000u | (mantissa << 13));
+        return std::bit_cast<float>(sign | ((exponent + 112) << 23) | (mantissa << 13));
+    };
     std::vector<float> values(count * 8);
-    for (unsigned i = 0; i < values.size(); ++i) values[i] = readFloat(buffer + i * 4);
+    for (unsigned p = 0; p < count; ++p) {
+        const auto record = buffer + p * 32;
+        for (unsigned i = 0; i < 4; ++i) values[p * 8 + i] = readFloat(record + i * 4);
+        for (unsigned i = 0; i < 4; ++i) values[p * 8 + 4 + i] = half(vm_read16(record + 16 + i * 2));
+    }
     return values;
 }
 

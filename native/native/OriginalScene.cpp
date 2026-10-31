@@ -93,7 +93,19 @@ void OriginalDisplay::build() {
         {"13",QJsonObject{{"native","noise"},{"repeat",true}}}});
     composite["vertex"] = "lines/lib/moyou/LinesController.vpo";
     QJsonArray passes{bg,sheet,composite};
-    auto glareSource = pass("glare-source-pre","GlareSourcePre",quadUniforms(),{{"0",QJsonObject{{"pass","composition"}}}});
+    // ParticlesLayer draws additively into the lit scene before glare (0x02060660).
+    QString scene = "composition";
+    for (const auto* program : {"particles_quads","particles_second"}) {
+        QJsonObject particles{{"name",QString(program)},{"geometry","particles"},
+            {"vertex",QString("lines/lib/particles/%1.vpo").arg(program)},
+            {"fragment",QString("lines/lib/particles/%1.fpo").arg(program)},
+            {"over",scene},{"blend","add"},{"format","rgba16f"},{"uniforms",QJsonObject{}},
+            {"particleBit",QString(program) == "particles_quads" ? 1 : 2},
+            {"textures",QJsonObject{{"0",QJsonObject{{"file","lines/particles/proc_iridescent.tga"}}}}}};
+        passes.append(particles);
+        scene = program;
+    }
+    auto glareSource = pass("glare-source-pre","GlareSourcePre",quadUniforms(),{{"0",QJsonObject{{"pass",scene}}}});
     glareSource["fragment"] = "lines/lib/glutils/GlareSourcePre.fpo";
     auto sourceUniforms = glareSource["uniforms"].toObject();
     sourceUniforms["_Exposure"] = QJsonArray{hdr_.at("EXPOSURE")};
@@ -137,7 +149,7 @@ void OriginalDisplay::build() {
         {"1",QJsonObject{{"pass",previous}}},{"13",QJsonObject{{"native","noise"},{"repeat",true}}}});
     final["fragment"] = "lines/lib/glutils/ToneApplyDisplay.fpo";
     auto finalUniforms = final["uniforms"].toObject(); finalUniforms["_GlareWeight"] = QJsonArray{1};
-    final["uniforms"] = finalUniforms; final["over"] = "composition"; final["blend"] = "add";
+    final["uniforms"] = finalUniforms; final["over"] = scene; final["blend"] = "add";
     passes.append(final);
     display_ = std::make_unique<Renderer>(shaders,graph(passes),reference_);
     const auto& textures = constants_.textures;
@@ -150,6 +162,31 @@ void OriginalDisplay::show(const OriginalSimulation::Frame& frame, QSize size) {
     for (unsigned i = 0; i < 2; ++i) display_->texture(QString("exposure%1").arg(i),QSize(128,128),frame.exposure[i].data(),true,true);
     display_->texture("noise",QSize(32,32),frame.noise.rgba.data(),false,true);
     display_->uniform("composition","_ScreenSizeRecip",QJsonArray{1.0/size.width(),1.0/size.height()});
+    display_->particles(frame.particles);
+    const auto& u = frame.particleUniforms;
+    display_->particleMask(u.passes);
+    const auto array = [](const auto& values, int count) { QJsonArray out; for (int i = 0; i < count; ++i) out.append(values[i]); return out; };
+    // RSX matrix parameters are rows; vectormath memory is column-major.
+    const auto rows = [](const RopeSolver::Matrix& columns) {
+        QJsonArray out; for (int r = 0; r < 4; ++r) for (int c = 0; c < 4; ++c) out.append(columns[c * 4 + r]); return out; };
+    const RopeSolver::Matrix identity{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
+    for (const auto* program : {"particles_quads","particles_second"}) {
+        const bool second = QString(program) == "particles_second";
+        display_->uniform(program,"_ModelviewProjection",rows(frame.projection));
+        display_->uniform(program,"_Modelview",rows(identity));
+        display_->uniform(program,"_LightPack",rows(u.lightPack));
+        for (const auto& [name, count] : std::initializer_list<std::pair<const char*, int>>{{"_ParticleSize",3},
+                {"_Transparency",2},{"_Focus",4},{"_FocusCurves",3},{"_FrontFacingQuaternion",4},
+                {"_LifeBoundsMin",3},{"_LifeBoundsMax",3},{"_Darkness",2}})
+            display_->uniform(program,name,array(u.vertex.at(name),count));
+        display_->uniform(program,second ? "_Glare" : "_NearControl",array(u.vertex.at(second ? "_Glare" : "_NearControl"),4));
+        const auto light = rows(u.fragmentLightPack);
+        for (int r = 0; r < 4; ++r)
+            display_->uniform(program,QString("_LightPack[%1]").arg(r),QJsonArray{light[r*4],light[r*4+1],light[r*4+2],light[r*4+3]});
+        display_->uniform(program,"_Color",array(u.fragment.at("_Color"),3));
+        display_->uniform(program,"_IridescentExp",array(u.fragment.at("_IridescentExp"),1));
+        display_->uniform(program,"_Gamma",array(u.fragment.at("_Gamma"),1));
+    }
 }
 
 QImage OriginalDisplay::capture(QSize size) { return display_->capture(size).convertToFormat(QImage::Format_RGB32); }

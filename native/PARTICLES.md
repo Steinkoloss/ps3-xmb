@@ -1,6 +1,27 @@
 # Particles port — working notes
 
-Status: simulation runs live (original constructor, emitter and PPU update path), not rendered yet.
+Status: simulated and drawn with the original programs. Not yet a visual match: too many
+large out-of-focus (bokeh) particles compared with the console capture.
+
+Drawing (0x02060660 → 0x0205c254, lifted): the original draw setup runs against unbound
+uniform objects and their values are read back (vertex object offsets: MVP 0x30,
+Modelview 0x90, Camera 0xf0, ParticleSize 0x150, LightPack 0x180, Transparency 0x1e0,
+Focus 0x210, FocusCurves 0x240, FrontFacingQuaternion 0x270, NearControl 0x2a0,
+LifeBoundsMin/Max 0x2d0/0x300, Darkness 0x330, Glare 0x360; fragment: LightPack 0x50,
+Color 0xb0, Gamma 0xe0 (inferred), NearControl/Glare 0x100, IridescentExp 0x190).
+qgl context at the unrelocated global 0x34 holds an identity modelview stack entry.
+Records are float4 position+size, half4 rotation (attr 11), half4 old position (attr 10);
+corners (0,0),(1,0),(1,1),(0,1) on attr 8; instanced quads, additive ONE/ONE into rgba16f
+passes over the composition, before glare. Draw mask (sys+0x1484 + 1): bit0 quads,
+bit1 second. Matrix uniforms go up as rows (transpose of vectormath memory) — the
+untransposed LightPack renders nothing, MVP rows put particles on the ribbon.
+
+Open: depth of field. _Focus = (6.12, 7.44, 12.2, 16.2) puts the in-focus band at
+distance 7.4-12.2 while particles (like the ribbon) sit at z -3.6..-8.8, so many render
+as large bokeh discs. Suspects: the particle camera (layer+0xb0, applied by FUN_020255a4
+in the layer render 0x0202b710) may carry its own view/projection; or the shader's depth
+convention. The console clip shows small sparkles hugging the ribbon and a dense cluster
+at the trail end. Also: deterministic RNG stand-in, emission count saturates at 2048.
 
 What runs (RopeSolver, same guest VM as the rope):
 - createParticles: original constructor 0x02060b14; render object ctor 0x0205e5c8 and

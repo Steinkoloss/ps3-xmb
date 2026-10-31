@@ -182,7 +182,9 @@ def prepare(args):
              # Particle system: constructor and the PPU update path (no SPU manager).
              0x02060b14,0x0205ddc8,
              # ParticlesLayer emitter: samples the ribbon grid and queues emit commands.
-             0x02030b80], 0x020a7d70,
+             0x02030b80,
+             # Particle draw: uniform values for the quads/second programs.
+             0x0205c254], 0x020a7d70,
             0x0208bc70, "moyou_rope_", stage)
         manifest["math_functions"] = lift(math, 0, ranges(args.math_bounds),
             {0x00095b44: 0xffff0001}, [0x00095f60,0x00093f94,0x00093b38,0x00092d34,0x00092e90],

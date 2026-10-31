@@ -103,14 +103,10 @@ OriginalSimulation::Frame OriginalSimulation::step(double seconds, QSize size) {
     RopeSolver::Matrix columns;
     std::copy_n(projection.inverted().constData(),16,columns.begin());
     rope_->emitParticles(particleLayer_,evaluated,128,128,columns);
-    const auto count = rope_->stepParticles(particles_,float(seconds));
+    rope_->stepParticles(particles_,float(seconds));
     frame.particles = rope_->particleVertices(particles_);
-    static const bool debug = qEnvironmentVariableIsSet("MOYOU_PARTICLE_DEBUG");
-    static unsigned debugFrame = 0;
-    if (debug && ++debugFrame % 30 == 0 && count)
-        std::fprintf(stderr,"particles %u first %g %g %g %g | %g %g %g %g\n",count,frame.particles[0],frame.particles[1],frame.particles[2],
-            frame.particles[3],frame.particles[4],frame.particles[5],frame.particles[6],frame.particles[7]);
-    else if (debug && debugFrame % 30 == 0) std::fprintf(stderr,"particles 0\n");
+    frame.particleUniforms = rope_->particleUniforms(particles_,0);
+    std::copy_n(projection.constData(),16,frame.projection.begin());
     auto exposure = rope_->exposure(hdr_.at("EXPOSURE"),hdr_.at("WHITELEVEL"),hdr_.at("GLARETHRESH"),1,1.0f/255);
     frame.exposure = std::move(exposure.rgba);
     frame.noise = std::move(exposure.noise);

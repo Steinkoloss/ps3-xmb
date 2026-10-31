@@ -34,6 +34,12 @@ Renderer::Renderer(const QString& directory, QJsonObject graph, QString resource
     glGenBuffers(1, &indices_);
     glGenBuffers(1, &meshVertices_);
     glGenBuffers(1, &meshIndices_);
+    glGenBuffers(1, &particleRecords_);
+    glGenBuffers(1, &particleCorners_);
+    // Original corner stream (renderer image 0x0209bff0), attribute 8.
+    constexpr float corners[] = {0,0, 1,0, 1,1, 0,1};
+    glBindBuffer(GL_ARRAY_BUFFER, particleCorners_);
+    glBufferData(GL_ARRAY_BUFFER, sizeof corners, corners, GL_STATIC_DRAW);
     constexpr float quad[] = {
         -1,-1,0,1, 0,1, 1,-1,0,1, 1,1, 1,1,0,1, 1,0, -1,1,0,1, 0,0,
     };
@@ -67,8 +73,8 @@ Renderer::Renderer(const QString& directory, QJsonObject graph, QString resource
 Renderer::~Renderer() {
     for (auto& pass : passes_) destroyTarget(pass.target);
     glDeleteTextures(static_cast<GLsizei>(ownedTextures_.size()), ownedTextures_.data());
-    GLuint buffers[] = {vertices_, indices_, meshVertices_, meshIndices_};
-    glDeleteBuffers(4, buffers);
+    GLuint buffers[] = {vertices_, indices_, meshVertices_, meshIndices_, particleRecords_, particleCorners_};
+    glDeleteBuffers(6, buffers);
     glDeleteVertexArrays(1, &vertexArray_);
 }
 
@@ -184,6 +190,30 @@ void Renderer::drawFullscreen() {
     glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr);
 }
 
+void Renderer::particles(const std::vector<float>& records) {
+    if (records.size() % 8 || records.size() / 8 > 0x4000) error("Wrong-sized original particle records");
+    glBindBuffer(GL_ARRAY_BUFFER, particleRecords_);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(records.size() * sizeof(float)), records.data(), GL_STREAM_DRAW);
+    particleCount_ = static_cast<GLsizei>(records.size() / 8);
+}
+
+void Renderer::drawParticles(unsigned bit) {
+    for (GLuint i = 0; i < 16; ++i) glDisableVertexAttribArray(i);
+    if (!particleCount_ || !(particleMask_ & bit)) return;
+    // RSX frequency dividers: corners per vertex, particle records per quad.
+    glBindBuffer(GL_ARRAY_BUFFER, particleCorners_);
+    glEnableVertexAttribArray(8);
+    glVertexAttribPointer(8, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), nullptr);
+    glBindBuffer(GL_ARRAY_BUFFER, particleRecords_);
+    for (GLuint i : {0u, 11u}) {
+        glEnableVertexAttribArray(i);
+        glVertexAttribPointer(i, 4, GL_FLOAT, GL_FALSE, 8 * sizeof(float), reinterpret_cast<void*>(i ? 4 * sizeof(float) : 0));
+        glVertexAttribDivisor(i, 1);
+    }
+    glDrawArraysInstanced(GL_TRIANGLE_FAN, 0, 4, particleCount_);
+    for (GLuint i : {0u, 11u}) glVertexAttribDivisor(i, 0);
+}
+
 void Renderer::drawMesh() {
     if (!indexCount_) error("Original sheet pass has no mesh source");
     glBindBuffer(GL_ARRAY_BUFFER, meshVertices_);
@@ -281,6 +311,7 @@ void Renderer::render(GLuint destination, QSize size) {
             }
         }
         if (spec.value("geometry").toString() == "sheet") drawMesh();
+        else if (spec.value("geometry").toString() == "particles") drawParticles(unsigned(spec.value("particleBit").toInt(1)));
         else drawFullscreen();
         if (spec.value("mipmaps").toBool()) {
             if (final || pass.target.type != GL_TEXTURE_2D) error("Original mipmap source needs an intermediate 2D target");

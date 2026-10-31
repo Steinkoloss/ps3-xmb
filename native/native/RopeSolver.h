@@ -40,6 +40,13 @@ public:
     void emitParticles(uint32_t layer, const std::vector<std::array<float, 8>>& grid, unsigned width,
                        unsigned height, const Matrix& columns);
     unsigned stepParticles(uint32_t system, float seconds);
+    struct ParticleUniforms {
+        Matrix camera{}, lightPack{}, fragmentLightPack{};
+        std::map<std::string, Vector> vertex, fragment;
+        unsigned passes = 0;  // bit 0: quads program, bit 1: second program
+    };
+    // Original draw setup 0x0205c254: uniform values for pass 0 (quads) or 1 (second).
+    ParticleUniforms particleUniforms(uint32_t system, unsigned pass);
     std::vector<float> particleVertices(uint32_t system) const;
     uint32_t guestWord(uint32_t address) const;  // development inspection
 private:
