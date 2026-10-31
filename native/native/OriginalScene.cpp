@@ -3,6 +3,7 @@
 #include <QFile>
 #include <QJsonArray>
 #include <QMatrix4x4>
+#include <QTime>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -21,6 +22,10 @@ QJsonObject pass(const QString& name, const QString& fragment, QJsonObject unifo
 namespace {
 double presetHour(const QString& preset, double hour) {
     if (!std::isfinite(hour) || hour > 24) throw std::runtime_error("Invalid original background time");
+    if (hour < 0 && preset == "clock") {
+        const auto now = QTime::currentTime();
+        return now.msecsSinceStartOfDay() / 3.6e6;
+    }
     if (hour < 0) hour = preset == "day" ? 12 : preset == "yoake" ? 6 : preset == "higure" ? 18 : 0;
     return hour;
 }
@@ -30,11 +35,11 @@ OriginalDisplay::OriginalDisplay(const QString& shaders, const QString& referenc
                                  OriginalSimulation::Constants constants, unsigned month, double hour) :
     shaders_(shaders), reference_(reference), preset_(preset), constants_(std::move(constants)) {
     if (month < 1 || month > 12) throw std::runtime_error("Invalid original background month");
-    line_ = originalMenu(reference,preset,"LINE1");
-    background_ = originalMenu(reference,preset,"BACKGROUND");
-    hdr_ = originalMenu(reference,preset,"HDR");
     month_ = month;
     hour_ = presetHour(preset,hour);
+    line_ = originalMenu(reference,preset,"LINE1",hour_);
+    background_ = originalMenu(reference,preset,"BACKGROUND",hour_);
+    hdr_ = originalMenu(reference,preset,"HDR",hour_);
     build();
 }
 
@@ -178,7 +183,32 @@ void OriginalDisplay::build() {
     display_->texture("encode",QSize(textures[1].width,textures[1].height),textures[1].rgba.data());
 }
 
+// Preset "clock": the simulation re-blended its menus; take the same blend for the
+// display uniforms (every blended value is a uniform, so no rebuild).
+void OriginalDisplay::applyMenus(const OriginalSimulation::Frame& frame) {
+    menus_ = frame.menus;
+    if (preset_ != "clock" || frame.menuHour < 0) return;
+    line_ = originalMenu(reference_,preset_,"LINE1",frame.menuHour);
+    background_ = originalMenu(reference_,preset_,"BACKGROUND",frame.menuHour);
+    hdr_ = originalMenu(reference_,preset_,"HDR",frame.menuHour);
+    constants_.glare = frame.glare;
+    for (const auto& [uniform, key] : std::initializer_list<std::pair<const char*, const char*>>{{"_Spacing","SPACING"},
+            {"_Thinness","THINNESS"},{"_Fresnel","FRESNEL"},{"_Brightness","BRIGHTNESS"},{"_MipmapBias","MIPMAPBIAS"}})
+        display_->uniform("ribbon",uniform,QJsonArray{line_.at(key)});
+    display_->uniform("glare-source-pre","_Exposure",QJsonArray{hdr_.at("EXPOSURE")});
+    display_->uniform("glare-source-pre","_WhiteSqrRcp",QJsonArray{1.0/(hdr_.at("WHITELEVEL")*hdr_.at("WHITELEVEL"))});
+    for (unsigned level = 0; level < 6; ++level) {
+        for (const auto& pass : {QString("glare-x-%1").arg(level),QString("glare-y-%1").arg(level)})
+            for (unsigned tap = 0; tap < 8; ++tap) {
+                const auto& w = frame.glare.taps[tap];
+                display_->uniform(pass,QString("_Weights%1").arg(tap),QJsonArray{w[0],w[1],w[2],0});
+            }
+        display_->uniform(QString("glare-sum-%1").arg(level),"_GlareWeight",QJsonArray{frame.glare.levels[level]});
+    }
+}
+
 void OriginalDisplay::show(const OriginalSimulation::Frame& frame, QSize size) {
+    if (frame.menus != menus_) applyMenus(frame);
     display_->mesh(frame.vertices);
     for (unsigned i = 0; i < 2; ++i) display_->texture(QString("exposure%1").arg(i),QSize(128,128),frame.exposure[i].data(),true,true);
     display_->texture("noise",QSize(32,32),frame.noise.rgba.data(),false,true);
@@ -217,7 +247,7 @@ QImage OriginalDisplay::capture(QSize size) { return display_->capture(size).con
 
 OriginalScene::OriginalScene(const QString& shaders, const QString& reference, const QString& cpu,
                              const QString& spline, const QString& preset, unsigned month, double hour) :
-    simulation_(shaders,reference,cpu,spline,preset),
+    simulation_(shaders,reference,cpu,spline,preset,presetHour(preset,hour)),
     display_(shaders,reference,preset,simulation_.constants(),month,hour) {}
 
 void OriginalScene::advance(double seconds, QSize size) {

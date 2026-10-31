@@ -6,8 +6,8 @@
   <kcfgfile name=""/>
   <group name="General">
     <entry name="Preset" type="String">
-      <label>Original override set: day, night, yoake or higure</label>
-      <default>day</default>
+      <label>Original override set: clock (blend by time of day, as the console), day, night, yoake or higure</label>
+      <default>clock</default>
     </entry>
     <entry name="Month" type="Int">
       <label>Month colour 1-12, or 0 to follow the calendar</label>

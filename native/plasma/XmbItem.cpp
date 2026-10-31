@@ -1,4 +1,5 @@
 #include "XmbItem.h"
+#include <QTime>
 #include "OriginalScene.h"
 #include <QDateTime>
 #include <QDir>
@@ -34,7 +35,8 @@ struct XmbChannel {
 
 class XmbSimulator {
 public:
-    XmbSimulator(XmbItem* item, const QString& data, const QString& preset) : item_(item), channel_(std::make_shared<XmbChannel>()) {
+    XmbSimulator(XmbItem* item, const QString& data, const QString& preset, double hour) :
+        item_(item), channel_(std::make_shared<XmbChannel>()), hour_(hour) {
         const QDir root(data);
         channel_->shaders = root.filePath("shaders");
         channel_->reference = root.filePath("reference");
@@ -65,6 +67,7 @@ public:
         wake_.notify_all();
     }
     void setFrameRate(int rate) { frameRate_ = std::clamp(rate, 1, 60); }
+    void setHour(double hour) { hour_ = hour; }
 private:
     void run(const QString& cpu, const QString& spline) {
         try {
@@ -72,7 +75,9 @@ private:
             context.setFormat(format());
             if (!context.create() || !context.makeCurrent(&surface_))
                 throw std::runtime_error("Cannot create the simulation OpenGL context");
-            OriginalSimulation simulation(channel_->shaders,channel_->reference,cpu,spline,channel_->preset);
+            const double fixed = hour_;
+            OriginalSimulation simulation(channel_->shaders,channel_->reference,cpu,spline,channel_->preset,
+                fixed >= 0 ? fixed : QTime::currentTime().msecsSinceStartOfDay() / 3.6e6);
             { std::lock_guard lock(channel_->mutex); channel_->constants = simulation.constants(); }
             using Clock = std::chrono::steady_clock;
             auto last = Clock::now(), next = last;
@@ -90,6 +95,8 @@ private:
                 last = now;
                 QSize size(width_,height_);
                 if (size.isEmpty()) size = QSize(1920,1080);
+                const double fixed = hour_;
+                simulation.setHour(fixed >= 0 ? fixed : QTime::currentTime().msecsSinceStartOfDay() / 3.6e6);
                 auto frame = simulation.step(seconds,size);
                 {
                     std::lock_guard lock(channel_->mutex);
@@ -122,6 +129,7 @@ private:
     std::condition_variable wake_;
     bool running_ = true, stop_ = false;
     std::atomic<int> width_{0}, height_{0}, frameRate_{60};
+    std::atomic<double> hour_{-1};
 };
 
 namespace {
@@ -226,6 +234,7 @@ void XmbItem::setMonth(int month) {
 void XmbItem::setHour(double hour) {
     if (hour == hour_ || hour > 24) return;
     hour_ = hour; emit timeChanged(); update();
+    if (simulator_) simulator_->setHour(hour);
 }
 void XmbItem::setRunning(bool running) {
     if (running == running_) return;
@@ -270,8 +279,8 @@ void XmbItem::restart() {
     if (data.isEmpty()) data = QStandardPaths::locate(QStandardPaths::GenericDataLocation,"ps3-xmb",QStandardPaths::LocateDirectory);
     if (data.isEmpty()) { fail("Install the local firmware-derived data to ~/.local/share/ps3-xmb"); return; }
     // The base menus lack the background's day/night entries; the console always applies a
-    // set, so an unset preset means the day set.
-    simulator_ = std::make_unique<XmbSimulator>(this,data,preset_.isEmpty() ? QStringLiteral("day") : preset_);
+    // set, so an unset preset follows the clock like the console.
+    simulator_ = std::make_unique<XmbSimulator>(this,data,preset_.isEmpty() ? QStringLiteral("clock") : preset_,hour_);
     QTimer::singleShot(120000,this,[this] { if (error_.isEmpty()) retryDelay_ = 2; });
     const auto ratio = window() ? window()->effectiveDevicePixelRatio() : 1.0;
     simulator_->setSize((size() * ratio).toSize());

@@ -69,3 +69,25 @@ module info at file offset 0x67f2c, TOC 0x76820) answers several former guesses:
 Remaining suspect: the layer's animated state normally driven by the XMB (colour,
 intensity, SPE factors; anim_coldboot_* in the renderer) and whatever else the boot
 sequence sets.
+
+## RPCS3 ground truth (2026-10-31)
+
+Guest memory read live from RPCS3 (`build/work/reference-runtime/memserver.py`: launches
+RPCS3 as a child, serves /proc/<pid>/mem reads; guest base 0x300000000, plugin relocated by
+-0x145c010, i.e. guest = image - 0x145c010). `compare.py` diffs system/layer/particles against
+`MOYOU_PARTICLE_DUMP`. RPCS3's GDB stub dies on a second connection and freezes emulation.
+
+- Particle positions/velocities/count match the console's distribution.
+- PARTICLES_UI (14 words at live/menu 0x3a-0x47) and PARTICLES_SPE (delta block 0x15c0)
+  were missing; now loaded.
+- sys+0x1358 is the camera FOV (0x0205de2c(system, camera+0x20)), read by the uniform setup
+  0x0205c254; it was being overwritten with dt.
+- Layer colour runs at (1,1,1,0), intensity 1.
+- Time-of-day presets blend continuously (0x02011600, table 0x0209c990, weight eased
+  3w²-2w³): 01-05 night→yoake, 05-07 yoake, 07-11 yoake→day, 11-13 day, 13-17 day→higure,
+  17-19 higure, 19-23 higure→night. Preset "clock" implements it.
+
+Open: background month blend. 0x02010900 computes (month-1)+(day-1)/days[month] (Feb 29
+special, days table 0x02091cb0) and passes it /12 with the day fraction to 0x020449b4
+(background+0x3b0); 0x0203cee4/0x0203cc40 turn that into DayTime/NightTime/MonthTime. We pass
+_MonthTime 0, so late in a month the colour is far off (Oct 31 console ≈ our November).

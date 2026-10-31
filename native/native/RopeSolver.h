@@ -36,7 +36,9 @@ public:
     GlareWeights glareWeights(Vector radii, float sumPower, float level);
     // Original particle system (PPU path); returns its guest address.
     uint32_t createParticles(unsigned capacity);
-    void particleParameters(uint32_t system, const std::map<std::string, float>& menu);
+    // PARTICLES, PARTICLES_UI and PARTICLES_SPE menus (keys lower case, spaces/underscores removed).
+    void particleParameters(uint32_t system, const std::map<std::string, float>& menu,
+                            const std::map<std::string, float>& ui, const std::map<std::string, float>& spe);
     uint32_t createParticleLayer(uint32_t system);
     // Original camera (constructor 0x02024a68): look-at view, column-major.
     Matrix cameraView() const;
@@ -54,6 +56,7 @@ public:
     ParticleUniforms particleUniforms(uint32_t system);
     std::vector<float> particleVertices(uint32_t system) const;
     uint32_t guestWord(uint32_t address) const;  // development inspection
+    std::vector<uint8_t> guestBytes(uint32_t address, uint32_t size) const;
 private:
     std::vector<uint8_t> exposureNoise();
     struct State;

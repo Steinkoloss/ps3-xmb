@@ -561,7 +561,8 @@ uint32_t RopeSolver::createParticles(unsigned capacity) {
 }
 
 // ParticlesMenu apply (0x020329a4): menu items in registration order 0x02034664 → sys+0x1490.
-void RopeSolver::particleParameters(uint32_t system, const std::map<std::string, float>& menu) {
+void RopeSolver::particleParameters(uint32_t system, const std::map<std::string, float>& menu,
+                                    const std::map<std::string, float>& ui, const std::map<std::string, float>& spe) {
     static constexpr std::array<const char*, 52> names = {"emitvelmin","emitvelmul","emitvelvar","emitconeangle",
         "emitnegprob","emitvelzscale","emitperframe","emitprob","agingspeed","agingvariance","friction",
         "spintimescale","deltatime","gravity","winddirx","winddiry","winddirz","windscale","windscale10",
@@ -593,6 +594,21 @@ void RopeSolver::particleParameters(uint32_t system, const std::map<std::string,
     put(0x29, item[35]); put(0x2a, item[36]);
     for (unsigned i = 0; i < 4; ++i) put(0x2b + i, item[37 + i]);
     for (unsigned i = 0; i < 11; ++i) put(0x2f + i, item[41 + i]);
+    // PARTICLES_UI follows in file order (words 0x3a-0x47), and PARTICLES_SPE fills the delta
+    // block sys+0x15c0 at the words its values adjust. Layout read from a running 4.93 XMB
+    // (RPCS3): live/menu words equal the UI file, delta words equal the SPE file.
+    static constexpr std::array<const char*, 14> uiNames = {"brownian","rshakebrw","dpadrotmax","dpadscalex",
+        "dpadscaley","dshakerotmax","dshakerotimp","dshakebrwimp","dshakethresh","dshakexcoeff","dshakegcoeff",
+        "iconwind","iconwindsclx","iconwindscly"};
+    const auto required = [](const std::map<std::string, float>& values, const char* name) {
+        auto found = values.find(name);
+        if (found == values.end()) throw std::runtime_error(std::string("Missing original particle parameter: ") + name);
+        return found->second;
+    };
+    for (unsigned i = 0; i < uiNames.size(); ++i) put(0x3a + i, required(ui, uiNames[i]));
+    for (const auto& [name, word] : std::initializer_list<std::pair<const char*, unsigned>>{
+            {"deltatime",0xe},{"glare",0x36},{"specularpower",0x20},{"sizemiddle",0x28},{"globalalpha",0x27}})
+        writeFloat(system + 0x15c0 + word * 4, required(spe, name));
 }
 
 RopeSolver::Matrix RopeSolver::cameraView() const {
@@ -627,12 +643,12 @@ uint32_t RopeSolver::createParticleLayer(uint32_t system) {
     cpu.gpr[5] = cpu.gpr[6] = cpu.gpr[7] = handles + 4;
     moyou_rope_func_020322B8(&cpu); drain(&cpu);
     vm_write32(layer + 0x18, system);
-    // Animated colour (+0xd0, target +0xf0) and intensity (+0x120, target +0x128) start at 0
-    // and are faded in by the XMB boot animations; start at the system's own neutral values
-    // (sys+0x1340 = 1,1,1,1 and sys+0x1350 = 1), i.e. after the fade-in.
-    for (unsigned i = 0; i < 4; ++i) { writeFloat(layer + 0xd0 + i * 4, 1); writeFloat(layer + 0xf0 + i * 4, 1); }
-    writeFloat(layer + 0x120, 1);
-    writeFloat(layer + 0x128, 1);
+    // Animated colour (current +0xd0, from +0xe0, to +0xf0) and intensity (+0x120/+0x124/+0x128)
+    // start at 0 and are faded in by the XMB boot animations. Start after the fade-in, at the
+    // values a running 4.93 XMB holds (RPCS3): colour (1,1,1,0), intensity 1.
+    for (unsigned i = 0; i < 3; ++i)
+        for (uint32_t field : {0xd0u, 0xe0u, 0xf0u}) writeFloat(layer + field + i * 4, 1);
+    for (unsigned i = 0; i < 3; ++i) writeFloat(layer + 0x120 + i * 4, 1);
     return layer;
 }
 
@@ -667,7 +683,9 @@ unsigned RopeSolver::particleFrame(uint32_t system, uint32_t layer, const std::v
     cpu.fpr[1] = seconds;
     moyou_rope_func_02031494(&cpu); drain(&cpu);   // frame logic, simulation inputs, emitter
     ++ticks;
-    writeFloat(system + 0x1358, seconds);
+    // 0x02031f44 → 0x0205de2c(system, camera FOV): the field takes the camera's FOV
+    // (0x02023ed8 reads camera+0x20; 0.925 on a running XMB), then the PPU update path runs.
+    writeFloat(system + 0x1358, readFloat(vm_read32(layer + 0xb0) + 0x20));
     cpu.gpr[3] = system;
     moyou_rope_func_0205DDC8(&cpu); drain(&cpu);   // PPU update path
     return vm_read32(system + 0x16fc);
@@ -724,6 +742,10 @@ RopeSolver::ParticleUniforms RopeSolver::particleUniforms(uint32_t system) {
 
 
 uint32_t RopeSolver::guestWord(uint32_t address) const { return vm_read32(address); }
+
+std::vector<uint8_t> RopeSolver::guestBytes(uint32_t address, uint32_t size) const {
+    return {vm_base + address, vm_base + address + size};
+}
 
 std::vector<float> RopeSolver::particleVertices(uint32_t system) const {
     const auto count = vm_read32(system + 0x16fc), buffer = vertexBuffers[1 - vm_read32(system + 0x16f4)];

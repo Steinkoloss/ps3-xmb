@@ -16,6 +16,8 @@ public:
 private:
     void build();
     QJsonObject backgroundTime() const;
+    void applyMenus(const OriginalSimulation::Frame& frame);
+    unsigned menus_ = 0;
     QString shaders_, reference_, preset_;
     OriginalSimulation::Constants constants_;
     std::map<QString,float> line_, background_, hdr_;

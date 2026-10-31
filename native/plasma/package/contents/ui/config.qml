@@ -15,8 +15,8 @@ Kirigami.FormLayout {
 
     QQC2.ComboBox {
         Kirigami.FormData.label: "Scene set:"
-        readonly property var values: ["day", "night", "yoake", "higure"]
-        model: ["Day", "Night", "Dawn (yoake)", "Dusk (higure)"]
+        readonly property var values: ["clock", "day", "night", "yoake", "higure"]
+        model: ["Follow the clock (console)", "Day", "Night", "Dawn (yoake)", "Dusk (higure)"]
         currentIndex: Math.max(0, values.indexOf(root.cfg_Preset))
         onActivated: index => root.cfg_Preset = values[index]
     }

@@ -9,7 +9,31 @@
 #include <cstdio>
 #include <stdexcept>
 
-std::map<QString,float> originalMenu(const QString& reference, const QString& preset, const QString& name) {
+PresetBlend presetBlend(double hour) {
+    if (!std::isfinite(hour) || hour < 0 || hour > 24) throw std::runtime_error("Invalid original preset time");
+    static const std::array<const char*,10> names = {"night","night","yoake","yoake","day","day","higure","higure","night","night"};
+    static constexpr std::array<double,9> times = {1,5,7,11,13,17,19,23,24};
+    const double t = hour;
+    for (unsigned j = 0; j < times.size(); ++j) {
+        if (t < times[j]) {
+            const double start = j ? times[j - 1] : 0;
+            const float w = float((t - start) / (times[j] - start));
+            return {names[j],names[j + 1],w * w * (3 - 2 * w)};
+        }
+    }
+    return {"night","night",0};
+}
+
+std::map<QString,float> originalMenu(const QString& reference, const QString& preset, const QString& name, double hour) {
+    if (preset == "clock") {
+        const auto blend = presetBlend(hour);
+        auto from = originalMenu(reference,blend.from,name), to = originalMenu(reference,blend.to,name);
+        for (auto& [key, value] : from) {
+            auto found = to.find(key);
+            if (found != to.end()) value += blend.weight * (found->second - value);
+        }
+        return from;
+    }
     std::map<QString,float> values;
     QStringList files = {QDir(reference).filePath("lines/" + name + ".mnu")};
     if (!preset.isEmpty()) files.append(QDir(reference).filePath("lines/override/" + preset + "/" + name + ".mnu"));
@@ -31,9 +55,10 @@ std::map<QString,float> originalMenu(const QString& reference, const QString& pr
 }
 
 OriginalSimulation::OriginalSimulation(const QString& shaders, const QString& reference, const QString& cpu,
-                                       const QString& spline, const QString& preset) {
-    const auto line = originalMenu(reference,preset,"LINE1");
-    hdr_ = originalMenu(reference,preset,"HDR");
+                                       const QString& spline, const QString& preset, double hour) :
+    reference_(reference), preset_(preset), menuHour_(hour) {
+    const auto line = originalMenu(reference,preset,"LINE1",hour);
+    hdr_ = originalMenu(reference,preset,"HDR",hour);
     rope_ = std::make_unique<RopeSolver>(QDir(cpu).filePath("renderer-image.bin").toStdString(),
         QDir(cpu).filePath("math-image.bin").toStdString());
     for (const auto* key : {"DAMPING","LENGTH","TENSION","SPACING","THINNESS","BRIGHTNESS","MIPMAPBIAS",
@@ -63,14 +88,45 @@ OriginalSimulation::OriginalSimulation(const QString& shaders, const QString& re
         uvw[(z * 4 + y) * 8 + x] = {float(x) * 0.125f,float(y) * 0.25f,float(z) * 0.25f,0};
     ffd_->texture("uvw",QSize(128,1),uvw.data(),true);
     deformation(0);
-    std::map<std::string,float> particleMenu;
-    for (const auto& [key, value] : originalMenu(reference,preset,"PARTICLES"))
-        particleMenu[QString(key).remove('_').toLower().toStdString()] = value;
+    const auto particleMenu = [&](const QString& name) {
+        std::map<std::string,float> values;
+        for (const auto& [key, value] : originalMenu(reference,preset,name,hour))
+            values[QString(key).remove('_').toLower().toStdString()] = value;
+        return values;
+    };
     particles_ = rope_->createParticles(2048);
-    rope_->particleParameters(particles_,particleMenu);
+    rope_->particleParameters(particles_,particleMenu("PARTICLES"),particleMenu("PARTICLES_UI"),particleMenu("PARTICLES_SPE"));
     particleLayer_ = rope_->createParticleLayer(particles_);
     constants_.glare = rope_->glareWeights({hdr_.at("GAUSSIANRADR"),hdr_.at("GAUSSIANRADG"),hdr_.at("GAUSSIANRADB"),0},
         hdr_.at("GLARESUMPOW"),hdr_.at("GLARELEVEL"));
+}
+
+// Live preset blend: the menu values that differ between time-of-day presets are rope
+// fields, FFD scales, the model rotation, HDR/glare and particle parameters.
+void OriginalSimulation::applyMenus(double hour) {
+    const auto line = originalMenu(reference_,preset_,"LINE1",hour);
+    hdr_ = originalMenu(reference_,preset_,"HDR",hour);
+    for (const auto* key : {"SPACING","THINNESS","BRIGHTNESS","MIPMAPBIAS","FRESNEL","FALLOFF","PERTURBATION","FFDPARAM1"})
+        rope_->parameter(key, line.at(key));
+    model_ = rope_->modelMatrix({line.at("POSX"),line.at("POSY"),line.at("POSZ"),1},
+        {line.at("ANGX"),line.at("ANGY"),line.at("ANGZ"),0},line.at("ANGROT"));
+    for (unsigned i = 0; i < 3; ++i) {
+        const auto axis = QString("XYZ").mid(i,1);
+        scale1_[i] = line.at("FFDSCALE1" + axis);
+        scale2_[i] = line.at("FFDSCALE2" + axis);
+        offset_[i] = line.at("FFDOFFSET" + axis);
+    }
+    const auto particleMenu = [&](const QString& name) {
+        std::map<std::string,float> values;
+        for (const auto& [key, value] : originalMenu(reference_,preset_,name,hour))
+            values[QString(key).remove('_').toLower().toStdString()] = value;
+        return values;
+    };
+    rope_->particleParameters(particles_,particleMenu("PARTICLES"),particleMenu("PARTICLES_UI"),particleMenu("PARTICLES_SPE"));
+    constants_.glare = rope_->glareWeights({hdr_.at("GAUSSIANRADR"),hdr_.at("GAUSSIANRADG"),hdr_.at("GAUSSIANRADB"),0},
+        hdr_.at("GLARESUMPOW"),hdr_.at("GLARELEVEL"));
+    menuHour_ = hour;
+    ++menus_;
 }
 
 void OriginalSimulation::deformation(float time) {
@@ -133,15 +189,37 @@ OriginalSimulation::Frame OriginalSimulation::step(double seconds, QSize size) {
     // of the previous update (the firmware double-buffers particle vertices too).
     Particles previous;
     if (particleJob_.valid()) previous = particleJob_.get();
+    // Re-blend between particle jobs (they share the particle system); a minute of clock
+    // time moves the eased weight by under 1%.
+    if (preset_ == "clock" && pendingHour_ >= 0 && std::abs(pendingHour_ - menuHour_) >= 1.0 / 60) applyMenus(pendingHour_);
     const float aspect = float(size.width()) / size.height();
     particleJob_ = std::async(std::launch::async,[this,grid = std::move(evaluated),columns,seconds,aspect] {
         rope_->particleFrame(particles_,particleLayer_,grid,128,128,columns,aspect,float(seconds));
+        // Development: MOYOU_PARTICLE_DUMP=<path> writes the system and layer for comparison
+        // with a running console/emulator (overwritten every frame).
+        if (const char* dump = std::getenv("MOYOU_PARTICLE_DUMP")) {
+            QFile file(dump);
+            if (file.open(QIODevice::WriteOnly)) {
+                const auto put = [&](uint32_t address, uint32_t size) {
+                    const auto bytes = rope_->guestBytes(address,size);
+                    file.write(reinterpret_cast<const char*>(&address),4);
+                    file.write(reinterpret_cast<const char*>(&size),4);
+                    file.write(reinterpret_cast<const char*>(bytes.data()),bytes.size());
+                };
+                put(particles_,0x1800);
+                put(particleLayer_,0x200);
+                put(rope_->guestWord(particles_ + 0x60),0x30 * 0x800);
+            }
+        }
         return Particles{rope_->particleVertices(particles_),rope_->particleUniforms(particles_)};
     });
     frame.particles = std::move(previous.vertices);
     frame.particleUniforms = std::move(previous.uniforms);
     std::copy_n(projection.constData(),16,frame.projection.begin());
     frame.view = view;
+    frame.menus = menus_;
+    frame.menuHour = menuHour_;
+    frame.glare = constants_.glare;
     auto exposure = rope_->exposure(hdr_.at("EXPOSURE"),hdr_.at("WHITELEVEL"),hdr_.at("GLARETHRESH"),1,1.0f/255);
     frame.exposure = std::move(exposure.rgba);
     frame.noise = std::move(exposure.noise);
