@@ -35,36 +35,89 @@ def ranges(path):
     return result
 
 
+def absolute_tables(instructions, read):
+    """Switches whose table base is built with lis/addi (ps3recomp matches TOC bases):
+    cmplwi crN,rI,LAST; bgt; lis rB,HI; ...; addi rB,rB,LO; lwzx; extsw; add; mtctr; bctr.
+    Entries are signed offsets from the table base."""
+    tables = {}
+    for index, instruction in enumerate(instructions):
+        if instruction.mnemonic != "bctr" or index < 8:
+            continue
+        window = instructions[index - 8:index]
+        names = [i.mnemonic for i in window]
+        if names[-4:] != ["lwzx", "extsw", "add", "mtctr"]:
+            continue
+        lis = next((i for i in window if i.mnemonic == "lis"), None)
+        addi = next((i for i in window if i.mnemonic == "addi" and lis and i.operands.split(",")[0] == lis.operands.split(",")[0]), None)
+        guard = next((i for i in reversed(instructions[max(0, index - 24):index]) if i.mnemonic == "cmplwi"), None)
+        if not (lis and addi and guard):
+            continue
+        table = (int(lis.operands.split(",")[1], 0) << 16) + int(addi.operands.split(",")[2], 0)
+        count = int(guard.operands.split(",")[-1], 0) + 1
+        offsets = [read(table + 4 * n) for n in range(count)]
+        offsets = [o - (1 << 32) if o & 0x80000000 else o for o in offsets]
+        tables[instruction.addr] = (table, count, sorted({table + o for o in offsets}))
+    return tables
+
+
 def lift(image, base, bounds, imports, roots, toc, code_end, prefix, stage):
     from ppu_disasm import disassemble_bytes
-    from ppu_lifter import PPULifter
+    from ppu_lifter import PPULifter, discover_jump_tables
     lifter = PPULifter(prefix=prefix)
     lifter.function_entries = set(bounds)
     lifter.hle_stub_nids = imports
     lifter.toc_base, lifter.code_lo, lifter.code_hi = toc, base, code_end
     lifter.header_name = prefix + "program.h"
     pending, done = set(roots), set()
+    table_words = []
+    read = lambda address: int.from_bytes(image[address - base:address - base + 4], "big")
     while pending:
         start = min(pending)
         pending.remove(start)
         if start in done:
             continue
         end = bounds.get(start)
+        if end is None and base <= start < base + len(image) and \
+                not any(other < start < bounds[other] for other in bounds):
+            # Call target in bytes Ghidra left unclaimed: it ends at the next
+            # known function or pending target, which a BLR must precede.
+            end = min([s for s in bounds if s > start] + [t for t in pending if t > start])
+            if image[end - 4 - base:end - base] != bytes.fromhex("4e800020"):
+                raise ValueError(f"Unclaimed original function at {start:#x} has no closing BLR")
+            bounds[start] = end
         if end is None or not base <= start < end <= base + len(image):
             raise ValueError(f"Missing verified function bounds at {start:#x}")
         instructions = disassemble_bytes(image[start - base:end - base], start)
         if any(instruction.mnemonic == "???" for instruction in instructions):
             raise ValueError(f"Undecoded original CPU instruction at {start:#x}")
+        # Switch dispatchers: cases come from the original jump tables, whose
+        # words sit after the BCTR and are the only data lifted as ".word".
+        for dispatcher, cases in discover_jump_tables(instructions, read, [toc], base, base + len(image),
+                                                      sorted(bounds)).items():
+            lifter.jump_tables[dispatcher] = cases
+            table_words += [read(a) for a in range(dispatcher + 4, min(cases), 4)
+                            if start <= a < end and read(a) < 0x10000]
+        for dispatcher, (table, count, cases) in absolute_tables(instructions, read).items():
+            if not all(start <= case < end for case in cases):
+                raise ValueError(f"Original switch at {dispatcher:#x} leaves its function")
+            lifter.jump_tables[dispatcher] = cases
+            table_words += [read(table + 4 * n) for n in range(count)]
         function = lifter.lift_function(instructions, start, end)
         done.add(start)
         pending |= (lifter.call_targets | lifter.branch_targets) - done
         if function.fallthrough_to:
             pending |= {function.fallthrough_to} - done
-        if len(done) > 128:
-            raise ValueError("CPU lift escaped the bounded rope/math closure")
+        if len(done) > 512:
+            raise ValueError("CPU lift escaped the bounded rope/particle/math closure")
     source = lifter.emit_source()
-    if re.search(r"TODO|unsupported|unhandled|undecoded|non-code|unknown", source, re.I):
-        raise ValueError("CPU lift contains an incomplete instruction or control-flow translation")
+    incomplete = [line.strip() for line in source.splitlines()
+                  if re.search(r"TODO|unsupported|unhandled|undecoded|non-code|unknown", line, re.I)]
+    words = sorted(int(line.split(".word")[1].split()[0], 16) for line in incomplete if "TODO: .word" in line)
+    if words == sorted(table_words):
+        incomplete = [line for line in incomplete if "TODO: .word" not in line]
+    if incomplete:
+        raise ValueError("CPU lift contains an incomplete instruction or control-flow translation:\n  " +
+                         "\n  ".join(incomplete[:20]))
     # ps3recomp defaults to host sqrt here; the Cell estimate has specific bits.
     source = '#include "CellEstimate.h"\n' + source.replace("vmx_vrsqrtefp(", "moyou_vrsqrtefp(")
     (stage / lifter.header_name).write_text(lifter.emit_header())
@@ -99,15 +152,21 @@ def prepare(args):
         manifest = {"schema": "moyou.native-rope.v1", "recompiler_revision": REVISION,
                     "renderer_image_sha256": RENDERER_IMAGE_SHA256, "math_image_sha256": MATH_IMAGE_SHA256}
         renderer_bounds = ranges(args.renderer_bounds)
-        # Ghidra's A2ALT decoder stops at LVLX here. The verified original
-        # routine continues to its BLR immediately before the next function.
-        if renderer_bounds.get(0x02024228) == 0x020242ac:
-            if renderer[0x243c0:0x243c4] != bytes.fromhex("4e800020"):
-                raise ValueError("Original axis-angle function boundary changed")
-            renderer_bounds[0x02024228] = 0x020243c4
+        # Ghidra's A2ALT decoder stops at LVLX. A function whose recorded end
+        # falls through into unclaimed bytes continues to the BLR immediately
+        # before the next function (0x02024228, 0x0203ff4c, 0x020584b4).
+        starts = sorted(renderer_bounds)
+        for start, following in zip(starts, starts[1:]):
+            end = renderer_bounds[start]
+            last = int.from_bytes(renderer[end - 4 - 0x02000000:end - 0x02000000], "big")
+            if end < following and last != 0x4e800020 and last >> 26 != 18 and \
+                    renderer[following - 4 - 0x02000000:following - 0x02000000] == bytes.fromhex("4e800020"):
+                renderer_bounds[start] = following
         manifest["rope_functions"] = lift(renderer, 0x02000000, renderer_bounds,
             imports | {0x0204c4e4: 0xffff0002, 0x0204b8e8: 0xffff0003, 0x0204b49c: 0xffff0004},
-            [0x0204bed0,0x0204f814,0x02029cc8,0x0203f290,0x0204bad0,0x0204b928,0x02071794,0x02071384], 0x020a7d70,
+            [0x0204bed0,0x0204f814,0x02029cc8,0x0203f290,0x0204bad0,0x0204b928,0x02071794,0x02071384,
+             # Particle system: constructor and the PPU update path (no SPU manager).
+             0x02060b14,0x0205ddc8], 0x020a7d70,
             0x0208bc70, "moyou_rope_", stage)
         manifest["math_functions"] = lift(math, 0, ranges(args.math_bounds),
             {0x00095b44: 0xffff0001}, [0x00095f60,0x00093f94,0x00093b38,0x00092d34,0x00092e90],
