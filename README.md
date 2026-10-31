@@ -19,7 +19,7 @@ commit them.
 | `third_party/scetool` | scetool checkout |
 | `work/reference` | `import_firmware.py` output |
 | `work/native-verified` | `lift_simulation.py` output (SPU translations) |
-| `work/cpu-glare` | `lift_rope.py` output (PPU translations, current) |
+| `work/cpu-particles` | `lift_rope.py` output (PPU translations incl. particles, current) |
 | `work/native-shaders-hdr` | `translate_shaders.py` output (current) |
 | `work/decompiler` | Ghidra project used by `PrepareMoyou.java` / `ExportMoyou.java` |
 | `qt` | CMake build tree |
@@ -29,7 +29,7 @@ commit them.
 ```bash
 W=$PWD/build/work
 cmake -S native -B build/qt -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DMOYOU_CPU_DIRECTORY=$W/cpu-glare -DMOYOU_SPU_DIRECTORY=$W/native-verified \
+  -DMOYOU_CPU_DIRECTORY=$W/cpu-particles -DMOYOU_SPU_DIRECTORY=$W/native-verified \
   -DMOYOU_RECOMPILER_DIRECTORY=$PWD/build/third_party/ps3recomp
 cmake --build build/qt
 ```
@@ -44,7 +44,7 @@ reference build; optimized output must stay bit-identical to it (compare
 ```bash
 W=build/work
 build/qt/moyou-preview --shaders $W/native-shaders-hdr --reference $W/reference \
-  --cpu $W/cpu-glare --spline $W/native-verified/spline/original-ls.bin --preset day
+  --cpu $W/cpu-particles --spline $W/native-verified/spline/original-ls.bin --preset day
 ```
 
 ## Test

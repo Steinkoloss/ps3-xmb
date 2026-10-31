@@ -17,7 +17,7 @@ rm -rf "$data.new"
 mkdir -p "$data.new/cpu" "$data.new/spline"
 cp -r "$work/native-shaders-hdr" "$data.new/shaders"
 cp -r "$work/reference" "$data.new/reference"
-cp "$work/cpu-glare/renderer-image.bin" "$work/cpu-glare/math-image.bin" "$data.new/cpu/"
+cp "$work/cpu-particles/renderer-image.bin" "$work/cpu-particles/math-image.bin" "$data.new/cpu/"
 cp "$work/native-verified/spline/original-ls.bin" "$data.new/spline/"
 rm -rf "$data" && mv "$data.new" "$data"
 
