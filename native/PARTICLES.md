@@ -1,6 +1,22 @@
 # Particles port — working notes
 
-Status: not rendered yet. PPU particle closure lifts and builds; nothing drives it.
+Status: simulation runs live (original constructor, emitter and PPU update path), not rendered yet.
+
+What runs (RopeSolver, same guest VM as the rope):
+- createParticles: original constructor 0x02060b14; render object ctor 0x0205e5c8 and
+  vertex-array mapping 0x020598a0 are native HLE (0xffff0005/6) with two vertex buffers.
+- particleParameters: native copy of ParticlesMenu apply 0x020329a4 (52 items).
+- createParticleLayer/emitParticles: layer object with +0x18 system, +0x40 grid
+  (data, 128, 128, column matrix at +0x50..0x8f), +0xb0 camera (identity basis); calls
+  the original emitter 0x02030b80 (random grid points with emit prob/emit per frame,
+  plus the row-walking trail emitter 0x0202dbf4).
+- stepParticles: memcpy live block, dt at +0x1358, original PPU path 0x0205ddc8.
+- OriginalSimulation feeds the SPU mesh with inverse(projection) as the grid matrix:
+  firmware grid matrix is Model × f(lines+0x230) on lines-layer vertices; our mesh is
+  clip space and inv(P)·clip is the same model-space point (rounding differs).
+
+Known deviations: qgl random 0x2e67e2d8 and tick 0xd15d6a2c are deterministic stand-ins
+(xorshift; per-emit counter), powf is host powf, PARTICLES_SPE.mnu (SPE menu) unused.
 
 ## Firmware structure (custom_render_plugin, image base 0x02000000, TOC 0x020a7d70)
 

@@ -1,4 +1,6 @@
 #include "RopeSolver.h"
+#include <cstdio>
+#include <cstdlib>
 #include <QCoreApplication>
 #include <QCommandLineParser>
 #include <QFile>
@@ -24,13 +26,39 @@ int main(int argc, char** argv) {
         {"settings","Original LINE1.mnu and optional override, in order.","file"},
         {"frames","Number of original 60 Hz frame updates.","count","1"},
         {"assets","Export original procedural LUTs and model matrix.","directory"},
-        {"output","361 x 4 float32 little-endian render-grid checkpoint.","file"}});
+        {"output","361 x 4 float32 little-endian render-grid checkpoint.","file"},
+        {"particles","Development: construct the original particle system and report.","capacity"}});
     parser.process(app);
     try {
         bool valid;
         const auto frames = parser.value("frames").toUInt(&valid);
         if (!valid || frames > 36000) throw std::runtime_error("Invalid bounded frame count");
         RopeSolver rope(parser.value("renderer").toStdString(), parser.value("math").toStdString());
+        if (parser.isSet("particles")) {
+            const auto system = rope.createParticles(parser.value("particles").toUInt());
+            std::map<std::string, float> menu;
+            for (const auto& path : parser.values("settings")) {
+                QFile file(path);
+                if (!file.open(QIODevice::ReadOnly)) throw std::runtime_error("Cannot read particle settings");
+                for (const auto& row : file.readAll().split('\n')) {
+                    auto fields = QString::fromUtf8(row).trimmed().split(':');
+                    if (fields.size() == 3) menu[fields[0].remove(' ').remove('_').toStdString()] = fields[2].toFloat();
+                }
+            }
+            rope.particleParameters(system, menu);
+            for (uint32_t offset : {0x30u,0x60u,0x70u,0x74u,0xa0u,0xa4u,0x1328u,0x132cu,0x1334u,0x1354u,0x16f0u,0x16f4u})
+                std::printf("sys+%04x = %08x\n", offset, rope.guestWord(system + offset));
+            for (unsigned frame = 1; frame <= frames; ++frame) {
+                const auto count = rope.stepParticles(system, 1.0f / 60);
+                if (frame % 60 == 0 || frame < 4) {
+                    auto v = rope.particleVertices(system);
+                    std::printf("frame %u: %u particles", frame, count);
+                    if (count) std::printf("  first (%g %g %g %g | %g %g %g %g)", v[0],v[1],v[2],v[3],v[4],v[5],v[6],v[7]);
+                    std::printf("\n");
+                }
+            }
+            return 0;
+        }
         std::set<QString> required = {"DAMPING","LENGTH","TENSION","TIMESTEP","PERTURBATION",
             "ENDX","ENDY","ENDZ","FFDPARAM1"};
         const std::set<QString> supported = {"DAMPING","LENGTH","TENSION","SPACING","THINNESS",
@@ -68,6 +96,10 @@ int main(int argc, char** argv) {
             }
             auto matrix = rope.modelMatrix({parameters.at("POSX"),parameters.at("POSY"),parameters.at("POSZ"),1},
                 {parameters.at("ANGX"),parameters.at("ANGY"),parameters.at("ANGZ"),0}, parameters.at("ANGROT"));
+            if (std::getenv("MOYOU_DUMP"))
+                for (uint32_t offset = 0x190; offset < 0x2c0; offset += 16)
+                    std::fprintf(stderr, "obj+%03x: %08x %08x %08x %08x\n", offset, rope.guestWord(0x01000000 + offset),
+                        rope.guestWord(0x01000004 + offset), rope.guestWord(0x01000008 + offset), rope.guestWord(0x0100000c + offset));
             QJsonArray values;
             for (auto value : matrix) values.append(value);
             QFile metadata(directory.filePath("model.json"));

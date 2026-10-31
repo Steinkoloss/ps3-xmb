@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -31,6 +32,16 @@ public:
     std::array<Texture, 2> textures();
     ExposureTables exposure(float exposure, float white, float threshold, float gamma, float dither);
     GlareWeights glareWeights(Vector radii, float sumPower, float level);
+    // Original particle system (PPU path); returns its guest address.
+    uint32_t createParticles(unsigned capacity);
+    void particleParameters(uint32_t system, const std::map<std::string, float>& menu);
+    uint32_t createParticleLayer(uint32_t system);
+    // Original emitter on a world-space grid: column-major matrix applied to 8-float vertices.
+    void emitParticles(uint32_t layer, const std::vector<std::array<float, 8>>& grid, unsigned width,
+                       unsigned height, const Matrix& columns);
+    unsigned stepParticles(uint32_t system, float seconds);
+    std::vector<float> particleVertices(uint32_t system) const;
+    uint32_t guestWord(uint32_t address) const;  // development inspection
 private:
     struct State;
     std::unique_ptr<State> state_;

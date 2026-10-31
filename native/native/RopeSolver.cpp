@@ -32,6 +32,14 @@ constexpr uint32_t imageBase = 0x02000000, object = 0x01000000, deformer = 0x010
 constexpr uint32_t stack = 0x01ff0000, arrays = 0x01010000;
 constexpr uint32_t menu = 0x01002000, controller = 0x01004000, handle = 0x01005000;
 constexpr uint32_t heapBase = 0x01100000;
+// Particle system object and its allocations (firmware new/memalign).
+constexpr uint32_t particleBase = 0x01500000, particleEnd = 0x01a00000;
+uint32_t particleCursor = particleBase;
+// Native particle render object: two vertex buffers named by tokens.
+constexpr uint32_t vertexToken = 0x7e000000;
+std::array<uint32_t, 2> vertexBuffers{};
+// qgl random (uniform [-1,1)) and tick counter. Not the firmware generator: deterministic stand-ins.
+uint32_t randomState = 0x12345678, ticks = 0;
 constexpr uint32_t toneObject = 0x01008000;
 constexpr std::array<uint32_t, 7> arrayFields = {0x44,0x74,0xa4,0xd4,0x104,0x134,0x164};
 constexpr uint32_t arrayBytes = 361 * 16;
@@ -42,8 +50,11 @@ std::map<uint32_t, std::array<uint32_t, 4>> lockedTextures;
 void check(uint64_t address, size_t size, bool write = false) {
     const auto end = address + size;
     bool valid = end >= address && ((address >= 0x10000 && end <= 0x800000 && !write) ||
+        // Unrelocated variable imports (lis rX,0): instance counters of other modules.
+        (address >= 0x10 && end <= 0x100) ||
         (address >= object && end <= 0x01020000) ||
         (address >= heapBase && end <= 0x01500000) ||
+        (address >= particleBase && end <= particleEnd) ||
         (address >= 0x01f00000 && end <= 0x02000000) ||
         (address >= imageBase && end <= imageBase + renderer_image_size &&
             (!write || address >= imageBase + 0x9f000)));
@@ -107,7 +118,37 @@ void vm_write64(uint64_t address, uint64_t value) {
     check(address, 8, true);
     for (unsigned i = 0; i < 8; ++i) vm_base[address + i] = value >> (56 - i * 8);
 }
-void ps3_indirect_call(ppu_context*) { throw std::runtime_error("Unadapted original CPU indirect call"); }
+#if __has_include("moyou_rope_dispatch.inc")
+const std::map<uint32_t, void (*)(ppu_context*)> lifted = {
+#include "moyou_rope_dispatch.inc"
+};
+#else
+const std::map<uint32_t, void (*)(ppu_context*)> lifted;
+#endif
+uint32_t particleAllocate(uint64_t bytes, uint64_t alignment);
+constexpr uint32_t nativeAllocate = 0x01fe0000;   // fake RSX memory manager method
+void ps3_indirect_call(ppu_context* ctx) {
+    if (uint32_t(ctx->ctr) == nativeAllocate) {
+        // (result, this, bytes, ..., alignment, ...): a refcounted block handle.
+        const auto block = particleAllocate(0x40, 16);
+        vm_write32(block + 0x10, particleAllocate(ctx->gpr[5], ctx->gpr[7] ? ctx->gpr[7] : 16));
+        vm_write32(ctx->gpr[3], block);
+        return;
+    }
+    auto function = lifted.find(uint32_t(ctx->ctr));
+    if (function == lifted.end())
+        throw std::runtime_error("Original CPU indirect call leaves the lifted closure: " + std::to_string(uint32_t(ctx->ctr)));
+    function->second(ctx);
+}
+uint32_t particleAllocate(uint64_t bytes, uint64_t alignment) {
+    if (alignment < 16) alignment = 16;
+    if (alignment & (alignment - 1) || alignment > 0x10000) throw std::runtime_error("Unadapted original allocation alignment");
+    const uint64_t address = (particleCursor + alignment - 1) & ~(alignment - 1);
+    if (bytes > particleEnd - address) throw std::runtime_error("Original particle allocations exceed native arena");
+    particleCursor = uint32_t(address + bytes);
+    std::memset(vm_base + address, 0, bytes);
+    return uint32_t(address);
+}
 void ps3_indirect_call_to(ppu_context*, uint32_t) { throw std::runtime_error("Unadapted original CPU indirect target"); }
 void ps3_hle_call(unsigned nid, ppu_context* ctx) {
     switch (nid) {
@@ -163,6 +204,58 @@ void ps3_hle_call(unsigned nid, ppu_context* ctx) {
         ctx->gpr[3] = found->second[0];
         return;
     }
+    case 0x83b2cc6f: ctx->gpr[3] = particleAllocate(ctx->gpr[3], 16); return;            // operator new
+    case 0xed3da02b: ctx->gpr[3] = particleAllocate(ctx->gpr[3], ctx->gpr[4]); return;   // aligned new
+    case 0xd84b3689: return;                                                           // delete: arena
+    case 0xf3b69a9a: ctx->gpr[3] = 1; return;                                          // common heap handle
+    case 0x9308c8c0: ctx->gpr[3] = particleAllocate(ctx->gpr[5], ctx->gpr[4]); return;   // heap alloc (named)
+    case 0x89c88658: ctx->gpr[3] = particleAllocate(ctx->gpr[5], ctx->gpr[4]); return;   // heap alloc
+    case 0xaddb8a27: return;                                                           // heap free: arena
+    case 0xad4384f2: ctx->gpr[3] = particleAllocate(ctx->gpr[4], 16); return;            // heap alloc (queue)
+    // GPU resource setup for the particle draw; the native renderer owns these.
+    case 0x1e3764f7: ctx->gpr[3] = particleAllocate(0x40, 16); return;                 // buffer object
+    case 0xd4fd336d: case 0x85bd0c33: case 0xc59c1fe5: case 0x90e4802b: case 0x97aeded8:
+        ctx->gpr[3] = 0; return;
+    case 0x5262639a: ctx->gpr[3] = 0; return;
+    case 0xf80196c1: ctx->gpr[3] = particleAllocate(16, 16); return;
+    case 0x8461e528: ctx->gpr[3] = 0; return;                                          // system time (stats only)
+    case 0xffff0005: {                                                                // render object ctor
+        const auto renderObject = uint32_t(ctx->gpr[3]), capacity = uint32_t(ctx->gpr[4]);
+        if (!capacity || capacity > 0x4000) throw std::runtime_error("Unadapted original particle capacity");
+        vm_write32(renderObject, 0x0209d8e0);
+        vm_write32(renderObject + 8, 1);       // held by the adapter; never released
+        vm_write32(renderObject + 0x10, capacity);
+        for (uint32_t i = 0; i < 2; ++i) {
+            vertexBuffers[i] = particleAllocate(capacity * 32, 0x80);
+            vm_write32(renderObject + 0x1c + i * 0xc, vertexToken + i);
+            const auto list = particleAllocate(16, 16);
+            vm_write32(list, 2);
+            vm_write32(renderObject + 0x44 + i * 4, list);
+        }
+        return;
+    }
+    case 0xffff0006: {                                                                // vertex array -> pointer
+        const auto token = uint32_t(ctx->gpr[3]) - vertexToken;
+        if (token > 1 || !vertexBuffers[token]) throw std::runtime_error("Unadapted original vertex array");
+        ctx->gpr[3] = vertexBuffers[token];
+        return;
+    }
+    case 0x4ddb926b: ctx->fpr[1] = std::pow(float(ctx->fpr[1]), float(ctx->fpr[2])); return;  // powf
+    case 0x5b162b7f: {                                                                       // memmove
+        const auto size = ctx->gpr[5];
+        check(ctx->gpr[3], size, true); check(ctx->gpr[4], size);
+        std::memmove(vm_base + ctx->gpr[3], vm_base + ctx->gpr[4], size);
+        return;
+    }
+    case 0x2e67e2d8:
+        randomState ^= randomState << 13; randomState ^= randomState >> 17; randomState ^= randomState << 5;
+        ctx->fpr[1] = float(randomState >> 8) / float(1 << 23) - 1.0f;
+        return;
+    case 0xd15d6a2c: ctx->gpr[3] = ticks; return;
+    case 0xc2c9c741:                     // Matrix3 from the camera basis rows (identity view here)
+        check(ctx->gpr[3], 48, true);
+        for (unsigned i = 0; i < 3; ++i) std::memcpy(vm_base + ctx->gpr[3] + i * 16, &ctx->vr[2 + i], 16);
+        return;
     case 0xffff0001: throw std::runtime_error("Original math requested an unadapted floating-point exception");
     case 0xffff0002: return; // GPU FFD submission is consumed by the rendering adapter.
     default: throw std::runtime_error("Unadapted original CPU import: " + std::to_string(nid));
@@ -177,8 +270,9 @@ struct RopeSolver::State {
         auto* memory = mmap(nullptr, ppu_vm_size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (memory == MAP_FAILED) throw std::runtime_error("Cannot reserve original CPU address space");
         vm_base = static_cast<uint8_t*>(memory);
-        for (const auto [start, size] : std::array<std::array<uint32_t, 2>, 4>{
-                {{0x00000000,0x00800000},{object,0x00020000},{heapBase,0x00400000},{0x01f00000,0x00200000}}}) {
+        for (const auto [start, size] : std::array<std::array<uint32_t, 2>, 5>{
+                {{0x00000000,0x00800000},{object,0x00020000},{heapBase,0x00400000},{0x01f00000,0x00200000},
+                 {particleBase,particleEnd - particleBase}}}) {
             if (mprotect(vm_base + start, size, PROT_READ | PROT_WRITE)) {
                 munmap(vm_base, ppu_vm_size); vm_base = nullptr;
                 throw std::runtime_error("Cannot map original CPU memory regions");
@@ -188,6 +282,7 @@ struct RopeSolver::State {
         cpu.gpr[2] = 0x020a7d70;
         cpu.vscr = 0x10000;
         heapCursor = heapBase;
+        particleCursor = particleBase;
         capturedTextures.clear();
         lockedTextures.clear();
     }
@@ -309,6 +404,107 @@ RopeSolver::Matrix RopeSolver::multiply(const Matrix& left, const Matrix& right)
     Matrix matrix;
     for (unsigned i = 0; i < 16; ++i) matrix[i] = readFloat(destination + i * 4);
     return matrix;
+}
+
+uint32_t RopeSolver::createParticles(unsigned capacity) {
+    auto& cpu = state_->cpu;
+    const auto system = particleAllocate(0x1980, 0x80), handles = particleAllocate(16, 16);
+    // Both handles name one memory manager whose vtable slot 5 allocates natively.
+    const auto manager = particleAllocate(0x40, 16), vtable = particleAllocate(0x40, 16), opd = particleAllocate(16, 16);
+    vm_write32(opd, nativeAllocate);
+    vm_write32(vtable + 0x14, opd);
+    vm_write32(manager, vtable);
+    vm_write32(manager + 8, 1);
+    vm_write32(handles, manager);
+    vm_write32(handles + 4, manager);
+    cpu.gpr[3] = system;
+    cpu.gpr[4] = handles + 8;
+    cpu.gpr[5] = capacity;
+    cpu.gpr[6] = handles;
+    cpu.gpr[7] = handles + 4;
+    moyou_rope_func_02060B14(&cpu); drain(&cpu);
+    return system;
+}
+
+// ParticlesMenu apply (0x020329a4): menu items in registration order 0x02034664 → sys+0x1490.
+void RopeSolver::particleParameters(uint32_t system, const std::map<std::string, float>& menu) {
+    static constexpr std::array<const char*, 52> names = {"emitvelmin","emitvelmul","emitvelvar","emitconeangle",
+        "emitnegprob","emitvelzscale","emitperframe","emitprob","agingspeed","agingvariance","friction",
+        "spintimescale","deltatime","gravity","winddirx","winddiry","winddirz","windscale","windscale10",
+        "brownianscale","spotposx","spotposy","spotposz","spotattnx","spotattny","spotattnz","specularpower",
+        "specularcoeff","lambertcoeff","exposure","fresnel","colorcontrol","iridescentexp","globalalpha",
+        "sizemiddle","sizenear","sizefar","nearfocus","nearfocusdist","nearfocuspow","neardarkness",
+        "nearfuzziness","farfocus","farfocusdist","farfocuspow","fardarkness","nearalign","sizealign","glare",
+        "glarescale","glarep1","glarep2"};
+    std::array<float, 52> item{};
+    for (unsigned i = 0; i < names.size(); ++i) {
+        auto found = menu.find(names[i]);
+        if (found == menu.end()) throw std::runtime_error(std::string("Missing original particle parameter: ") + names[i]);
+        item[i] = found->second;
+    }
+    const auto block = system + 0x1490;
+    const auto put = [&](unsigned word, float value) { writeFloat(block + word * 4, value); };
+    for (unsigned i = 0; i < 6; ++i) put(i, item[i]);
+    vm_write32(block + 6 * 4, uint32_t(int32_t(item[6])));     // emit per frame, truncated
+    put(7, item[7]); put(8, item[8]); put(9, item[9]);
+    for (unsigned i = 0; i < 4; ++i) put(0xc + i, item[10 + i]);
+    for (unsigned i = 0; i < 3; ++i) put(0x10 + i, item[14 + i]);
+    put(0x13, 0);
+    put(0x14, item[18] * readFloat(0x020924b4) + item[17]);
+    put(0x15, item[19]);
+    for (unsigned i = 0; i < 3; ++i) { put(0x18 + i, item[20 + i]); put(0x1c + i, item[23 + i]); }
+    put(0x1b, 0); put(0x1f, 0);
+    put(0x20, item[26]); put(0x23, item[29]); put(0x21, item[27]); put(0x22, item[28]);
+    for (unsigned i = 0; i < 5; ++i) put(0x24 + i, item[30 + i]);
+    put(0x29, item[35]); put(0x2a, item[36]);
+    for (unsigned i = 0; i < 4; ++i) put(0x2b + i, item[37 + i]);
+    for (unsigned i = 0; i < 11; ++i) put(0x2f + i, item[41 + i]);
+}
+
+uint32_t RopeSolver::createParticleLayer(uint32_t system) {
+    const auto layer = particleAllocate(0x1100, 16), camera = particleAllocate(0x100, 16);
+    vm_write32(layer + 0x18, system);
+    // Camera basis rows: the native renderer draws with an identity view.
+    for (unsigned i = 0; i < 3; ++i) writeFloat(camera + 0x60 + i * 0x14, 1.0f);
+    vm_write32(layer + 0xb0, camera);
+    return layer;
+}
+
+void RopeSolver::emitParticles(uint32_t layer, const std::vector<std::array<float, 8>>& grid, unsigned width,
+                               unsigned height, const Matrix& columns) {
+    if (grid.size() != size_t(width) * height) throw std::runtime_error("Invalid particle emission grid");
+    auto data = vm_read32(layer + 0x1080);
+    if (!data) { data = particleAllocate(grid.size() * 32, 0x80); vm_write32(layer + 0x1080, data); }
+    for (size_t i = 0; i < grid.size(); ++i)
+        for (unsigned c = 0; c < 8; ++c) writeFloat(data + i * 32 + c * 4, grid[i][c]);
+    // ParticlesLayer grid (0x0202b288): vertices, width, height, matrix columns.
+    vm_write32(layer + 0x40, data);
+    vm_write32(layer + 0x44, width);
+    vm_write32(layer + 0x48, height);
+    for (unsigned i = 0; i < 16; ++i) writeFloat(layer + 0x50 + i * 4, columns[i]);
+    auto& cpu = state_->cpu;
+    cpu.gpr[3] = layer;
+    moyou_rope_func_02030B80(&cpu); drain(&cpu);
+    ++ticks;
+}
+
+unsigned RopeSolver::stepParticles(uint32_t system, float seconds) {
+    auto& cpu = state_->cpu;
+    // ParticlesLayer frame (0x02031f44): live block from the menu copy, then the PPU path.
+    std::memmove(vm_base + system + 0x1360, vm_base + system + 0x1490, 0x128);
+    writeFloat(system + 0x1358, seconds);
+    cpu.gpr[3] = system;
+    moyou_rope_func_0205DDC8(&cpu); drain(&cpu);
+    return vm_read32(system + 0x16fc);
+}
+
+uint32_t RopeSolver::guestWord(uint32_t address) const { return vm_read32(address); }
+
+std::vector<float> RopeSolver::particleVertices(uint32_t system) const {
+    const auto count = vm_read32(system + 0x16fc), buffer = vertexBuffers[1 - vm_read32(system + 0x16f4)];
+    std::vector<float> values(count * 8);
+    for (unsigned i = 0; i < values.size(); ++i) values[i] = readFloat(buffer + i * 4);
+    return values;
 }
 
 std::array<RopeSolver::Texture, 2> RopeSolver::textures() {

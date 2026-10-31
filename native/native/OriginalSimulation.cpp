@@ -5,6 +5,7 @@
 #include <QMatrix4x4>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <stdexcept>
 
 std::map<QString,float> originalMenu(const QString& reference, const QString& preset, const QString& name) {
@@ -61,6 +62,12 @@ OriginalSimulation::OriginalSimulation(const QString& shaders, const QString& re
         uvw[(z * 4 + y) * 8 + x] = {float(x) * 0.125f,float(y) * 0.25f,float(z) * 0.25f,0};
     ffd_->texture("uvw",QSize(128,1),uvw.data(),true);
     deformation(0);
+    std::map<std::string,float> particleMenu;
+    for (const auto& [key, value] : originalMenu(reference,preset,"PARTICLES"))
+        particleMenu[QString(key).remove('_').toLower().toStdString()] = value;
+    particles_ = rope_->createParticles(2048);
+    rope_->particleParameters(particles_,particleMenu);
+    particleLayer_ = rope_->createParticleLayer(particles_);
     constants_.glare = rope_->glareWeights({hdr_.at("GAUSSIANRADR"),hdr_.at("GAUSSIANRADG"),hdr_.at("GAUSSIANRADB"),0},
         hdr_.at("GLARESUMPOW"),hdr_.at("GLARELEVEL"));
 }
@@ -92,6 +99,18 @@ OriginalSimulation::Frame OriginalSimulation::step(double seconds, QSize size) {
         vertices[index * 9 + 8] = std::min(1.0f,(0.5f-std::abs(0.5f-u))*10.0f) *
             std::min(1.0f,(0.5f-std::abs(0.5f-v))*10.0f);
     }
+    // Particles emit from the world-space ribbon: inverse projection of the clip-space mesh.
+    RopeSolver::Matrix columns;
+    std::copy_n(projection.inverted().constData(),16,columns.begin());
+    rope_->emitParticles(particleLayer_,evaluated,128,128,columns);
+    const auto count = rope_->stepParticles(particles_,float(seconds));
+    frame.particles = rope_->particleVertices(particles_);
+    static const bool debug = qEnvironmentVariableIsSet("MOYOU_PARTICLE_DEBUG");
+    static unsigned debugFrame = 0;
+    if (debug && ++debugFrame % 30 == 0 && count)
+        std::fprintf(stderr,"particles %u first %g %g %g %g | %g %g %g %g\n",count,frame.particles[0],frame.particles[1],frame.particles[2],
+            frame.particles[3],frame.particles[4],frame.particles[5],frame.particles[6],frame.particles[7]);
+    else if (debug && debugFrame % 30 == 0) std::fprintf(stderr,"particles 0\n");
     auto exposure = rope_->exposure(hdr_.at("EXPOSURE"),hdr_.at("WHITELEVEL"),hdr_.at("GLARETHRESH"),1,1.0f/255);
     frame.exposure = std::move(exposure.rgba);
     frame.noise = std::move(exposure.noise);

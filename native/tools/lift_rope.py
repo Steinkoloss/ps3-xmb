@@ -71,6 +71,12 @@ def lift(image, base, bounds, imports, roots, toc, code_end, prefix, stage):
     pending, done = set(roots), set()
     table_words = []
     read = lambda address: int.from_bytes(image[address - base:address - base + 4], "big")
+    # Every BL target is a function entry; they bound functions Ghidra left unclaimed.
+    entries = set()
+    for offset in range(0, code_end - base, 4):
+        word = int.from_bytes(image[offset:offset + 4], "big")
+        if word & 0xfc000003 == 0x48000001:
+            entries.add(base + offset + (word & 0x3fffffc) - (0x4000000 if word & 0x2000000 else 0))
     while pending:
         start = min(pending)
         pending.remove(start)
@@ -81,9 +87,12 @@ def lift(image, base, bounds, imports, roots, toc, code_end, prefix, stage):
                 not any(other < start < bounds[other] for other in bounds):
             # Call target in bytes Ghidra left unclaimed: it ends at the next
             # known function or pending target, which a BLR must precede.
-            end = min([s for s in bounds if s > start] + [t for t in pending if t > start])
-            if image[end - 4 - base:end - base] != bytes.fromhex("4e800020"):
-                raise ValueError(f"Unclaimed original function at {start:#x} has no closing BLR")
+            end = min([s for s in bounds if s > start] + [t for t in pending | entries if t > start])
+            last = int.from_bytes(image[end - 4 - base:end - base], "big")
+            displacement = (last & 0x3fffffc) - (0x4000000 if last & 0x2000000 else 0)
+            closes = last == 0x4e800020 or (last & 0xfc000003 == 0x48000000 and start <= end - 4 + displacement < end)
+            if not closes:
+                raise ValueError(f"Unclaimed original function at {start:#x} has no closing BLR or loop branch")
             bounds[start] = end
         if end is None or not base <= start < end <= base + len(image):
             raise ValueError(f"Missing verified function bounds at {start:#x}")
@@ -121,6 +130,9 @@ def lift(image, base, bounds, imports, roots, toc, code_end, prefix, stage):
     # ps3recomp defaults to host sqrt here; the Cell estimate has specific bits.
     source = '#include "CellEstimate.h"\n' + source.replace("vmx_vrsqrtefp(", "moyou_vrsqrtefp(")
     (stage / lifter.header_name).write_text(lifter.emit_header())
+    # Indirect calls (virtual methods) resolve only to functions in this closure.
+    (stage / (prefix + "dispatch.inc")).write_text("".join(
+        f"{{0x{f.start_addr:08x}u, {prefix}func_{f.start_addr:08X}}},\n" for f in lifter.functions))
     (stage / (prefix + "program.cpp")).write_text(source)
     return [{"start": f"0x{f.start_addr:08x}", "end": f"0x{f.end_addr:08x}"} for f in lifter.functions]
 
@@ -163,10 +175,14 @@ def prepare(args):
                     renderer[following - 4 - 0x02000000:following - 0x02000000] == bytes.fromhex("4e800020"):
                 renderer_bounds[start] = following
         manifest["rope_functions"] = lift(renderer, 0x02000000, renderer_bounds,
-            imports | {0x0204c4e4: 0xffff0002, 0x0204b8e8: 0xffff0003, 0x0204b49c: 0xffff0004},
+            # Particle render object (GPU buffers/texture) and its vertex-array mapping are native.
+            imports | {0x0204c4e4: 0xffff0002, 0x0204b8e8: 0xffff0003, 0x0204b49c: 0xffff0004,
+                       0x0205e5c8: 0xffff0005, 0x020598a0: 0xffff0006},
             [0x0204bed0,0x0204f814,0x02029cc8,0x0203f290,0x0204bad0,0x0204b928,0x02071794,0x02071384,
              # Particle system: constructor and the PPU update path (no SPU manager).
-             0x02060b14,0x0205ddc8], 0x020a7d70,
+             0x02060b14,0x0205ddc8,
+             # ParticlesLayer emitter: samples the ribbon grid and queues emit commands.
+             0x02030b80], 0x020a7d70,
             0x0208bc70, "moyou_rope_", stage)
         manifest["math_functions"] = lift(math, 0, ranges(args.math_bounds),
             {0x00095b44: 0xffff0001}, [0x00095f60,0x00093f94,0x00093b38,0x00092d34,0x00092e90],
