@@ -20,6 +20,8 @@ class XmbItem : public QQuickFramebufferObject {
     // 0-24, or negative to follow the system clock.
     Q_PROPERTY(double hour READ hour WRITE setHour NOTIFY timeChanged)
     Q_PROPERTY(bool running READ running WRITE setRunning NOTIFY runningChanged)
+    // Simulation updates per second (1-60); the simulation itself stays real-time.
+    Q_PROPERTY(int frameRate READ frameRate WRITE setFrameRate NOTIFY frameRateChanged)
     Q_PROPERTY(QString error READ error NOTIFY errorChanged)
 public:
     explicit XmbItem(QQuickItem* parent = nullptr);
@@ -36,6 +38,8 @@ public:
     void setHour(double hour);
     bool running() const { return running_; }
     void setRunning(bool running);
+    int frameRate() const { return frameRate_; }
+    void setFrameRate(int rate);
     QString error() const { return error_; }
 
     std::shared_ptr<XmbChannel> channel() const;
@@ -44,6 +48,7 @@ signals:
     void sourceChanged();
     void timeChanged();
     void runningChanged();
+    void frameRateChanged();
     void errorChanged();
 protected:
     void componentComplete() override;
@@ -54,5 +59,6 @@ private:
     int month_ = 0;
     double hour_ = -1;
     bool running_ = true;
+    int frameRate_ = 60;
     std::unique_ptr<XmbSimulator> simulator_;
 };

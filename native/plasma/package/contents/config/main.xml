@@ -17,5 +17,9 @@
       <label>Fixed hour 0-23, or -1 to follow the clock</label>
       <default>-1</default>
     </entry>
+    <entry name="FrameRate" type="Int">
+      <label>Updates per second: 60, or 30 to halve CPU use</label>
+      <default>60</default>
+    </entry>
   </group>
 </kcfg>

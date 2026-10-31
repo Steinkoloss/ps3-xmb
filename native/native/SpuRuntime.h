@@ -4,8 +4,11 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-// Calls are serial in the checked baseline. 0 = spline, 1 = particles.
+// 0 = spline, 1 = particles. State is per thread: open on one thread, publish its
+// prepared context, attach other threads to a copy of it.
 int moyou_spu_open(unsigned program, const char* image);
+int moyou_spu_publish(void);
+int moyou_spu_attach(void);
 int moyou_spu_call(uint32_t entry, uint64_t budget);
 int moyou_spu_write(uint32_t address, const void* bytes, size_t size);
 int moyou_spu_read(uint32_t address, void* bytes, size_t size);

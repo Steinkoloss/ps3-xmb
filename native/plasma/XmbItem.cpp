@@ -9,7 +9,9 @@
 #include <QQuickOpenGLUtils>
 #include <QQuickWindow>
 #include <QStandardPaths>
+#include <algorithm>
 #include <atomic>
+#include <functional>
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
@@ -22,7 +24,9 @@ struct XmbChannel {
     QString shaders, reference, preset;
     std::optional<OriginalSimulation::Constants> constants;
     OriginalSimulation::Frame frame;
-    uint64_t frameId = 0;
+    uint64_t frameId = 0, consumed = 0;
+    // Wakes the simulation when the renderer takes a frame.
+    std::function<void()> taken;
 };
 
 class XmbSimulator {
@@ -32,6 +36,7 @@ public:
         channel_->shaders = root.filePath("shaders");
         channel_->reference = root.filePath("reference");
         channel_->preset = preset;
+        channel_->taken = [this] { { std::lock_guard lock(control_); } wake_.notify_all(); };
         surface_.setFormat(format());
         surface_.create();
         thread_ = std::thread([this, cpu = root.filePath("cpu"), spline = root.filePath("spline/original-ls.bin")] { run(cpu,spline); });
@@ -53,6 +58,7 @@ public:
         { std::lock_guard lock(control_); running_ = running; }
         wake_.notify_all();
     }
+    void setFrameRate(int rate) { frameRate_ = std::clamp(rate, 1, 60); }
 private:
     void run(const QString& cpu, const QString& spline) {
         try {
@@ -63,7 +69,6 @@ private:
             OriginalSimulation simulation(channel_->shaders,channel_->reference,cpu,spline,channel_->preset);
             { std::lock_guard lock(channel_->mutex); channel_->constants = simulation.constants(); }
             using Clock = std::chrono::steady_clock;
-            constexpr auto period = std::chrono::nanoseconds(1'000'000'000 / 60);
             auto last = Clock::now(), next = last;
             for (;;) {
                 {
@@ -86,9 +91,16 @@ private:
                     ++channel_->frameId;
                 }
                 QMetaObject::invokeMethod(item_,"update",Qt::QueuedConnection);
+                const auto period = std::chrono::nanoseconds(1'000'000'000 / frameRate_.load());
                 next = std::max(next + period,Clock::now() - period);
                 std::unique_lock lock(control_);
                 wake_.wait_until(lock,next,[&] { return stop_; });
+                // Simulate only frames that get shown: wait until this one is taken.
+                wake_.wait(lock,[&] {
+                    if (stop_) return true;
+                    std::lock_guard frameLock(channel_->mutex);
+                    return channel_->consumed + 1 >= channel_->frameId;  // one frame in flight
+                });
                 if (stop_) break;
             }
             context.doneCurrent();
@@ -103,7 +115,7 @@ private:
     std::mutex control_;
     std::condition_variable wake_;
     bool running_ = true, stop_ = false;
-    std::atomic<int> width_{0}, height_{0};
+    std::atomic<int> width_{0}, height_{0}, frameRate_{60};
 };
 
 namespace {
@@ -159,7 +171,9 @@ private:
             }
             id = channel_->frameId;
             if (display_ && id != shown_) frame = std::move(channel_->frame);
+            channel_->consumed = id;
         }
+        if (channel_->taken) channel_->taken();
         if (!display_) return false;
         if (month != monthShown_ || std::abs(hour - hourShown_) > 1.0 / 3600) {
             display_->setTime(month,hour);
@@ -212,6 +226,14 @@ void XmbItem::setRunning(bool running) {
     emit runningChanged();
 }
 
+void XmbItem::setFrameRate(int rate) {
+    rate = std::clamp(rate, 1, 60);
+    if (rate == frameRate_) return;
+    frameRate_ = rate;
+    if (simulator_) simulator_->setFrameRate(rate);
+    emit frameRateChanged();
+}
+
 void XmbItem::componentComplete() {
     QQuickFramebufferObject::componentComplete();
     restart();
@@ -236,6 +258,7 @@ void XmbItem::restart() {
     const auto ratio = window() ? window()->effectiveDevicePixelRatio() : 1.0;
     simulator_->setSize((size() * ratio).toSize());
     simulator_->setRunning(running_);
+    simulator_->setFrameRate(frameRate_);
     update();
 }
 

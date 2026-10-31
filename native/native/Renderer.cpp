@@ -71,6 +71,9 @@ Renderer::Renderer(const QString& directory, QJsonObject graph, QString resource
 }
 
 Renderer::~Renderer() {
+    if (readFence_) glDeleteSync(readFence_);
+    if (readBuffer_) glDeleteBuffers(1, &readBuffer_);
+    destroyTarget(readTarget_);
     for (auto& pass : passes_) destroyTarget(pass.target);
     glDeleteTextures(static_cast<GLsizei>(ownedTextures_.size()), ownedTextures_.data());
     GLuint buffers[] = {vertices_, indices_, meshVertices_, meshIndices_, particleRecords_, particleCorners_};
@@ -344,6 +347,34 @@ QImage Renderer::capture(QSize size) {
     glReadPixels(0, 0, size.width(), size.height(), GL_RGBA, GL_UNSIGNED_BYTE, image.bits());
     destroyTarget(target);
     return image.flipped(Qt::Vertical);
+}
+
+void Renderer::requestFloat(QSize size) {
+    if (readFence_) error("Previous original float capture was not collected");
+    if (readTarget_.size != size) { destroyTarget(readTarget_); readTarget_ = createTarget(size, GL_RGBA32F); }
+    render(readTarget_.framebuffer, size);
+    if (!readBuffer_) glGenBuffers(1, &readBuffer_);
+    const auto bytes = static_cast<GLsizeiptr>(size.width()) * size.height() * 4 * sizeof(float);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, readBuffer_);
+    glBufferData(GL_PIXEL_PACK_BUFFER, bytes, nullptr, GL_STREAM_READ);
+    glBindFramebuffer(GL_FRAMEBUFFER, readTarget_.framebuffer);
+    glReadPixels(0, 0, size.width(), size.height(), GL_RGBA, GL_FLOAT, nullptr);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    readFence_ = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    glFlush();
+    readSize_ = size;
+}
+
+std::vector<float> Renderer::collectFloat() {
+    if (!readFence_) error("No original float capture in flight");
+    glClientWaitSync(readFence_, GL_SYNC_FLUSH_COMMANDS_BIT, GLuint64(5) * 1000000000);
+    glDeleteSync(readFence_);
+    readFence_ = nullptr;
+    std::vector<float> pixels(static_cast<size_t>(readSize_.width()) * readSize_.height() * 4);
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, readBuffer_);
+    glGetBufferSubData(GL_PIXEL_PACK_BUFFER, 0, static_cast<GLsizeiptr>(pixels.size() * sizeof(float)), pixels.data());
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    return pixels;
 }
 
 std::vector<float> Renderer::captureFloat(QSize size) {

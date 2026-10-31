@@ -27,13 +27,20 @@ int main(int argc, char** argv) {
         {"frames","Number of original 60 Hz frame updates.","count","1"},
         {"assets","Export original procedural LUTs and model matrix.","directory"},
         {"output","361 x 4 float32 little-endian render-grid checkpoint.","file"},
-        {"particles","Development: construct the original particle system and report.","capacity"}});
+        {"particles","Development: construct the original particle system and report.","capacity"},
+        {"noise-check","Compare native exposure noise with the original for N frames.","frames"}});
     parser.process(app);
     try {
         bool valid;
         const auto frames = parser.value("frames").toUInt(&valid);
         if (!valid || frames > 36000) throw std::runtime_error("Invalid bounded frame count");
         RopeSolver rope(parser.value("renderer").toStdString(), parser.value("math").toStdString());
+        if (parser.isSet("noise-check")) {
+            rope.exposure(0.6f, 1.2f, 0.4f, 1, 1.0f / 255);
+            if (!rope.checkExposureNoise(parser.value("noise-check").toUInt())) throw std::runtime_error("Native exposure noise differs");
+            std::printf("exposure noise identical\n");
+            return 0;
+        }
         if (parser.isSet("particles")) {
             const auto system = rope.createParticles(parser.value("particles").toUInt());
             std::map<std::string, float> menu;

@@ -12,13 +12,17 @@ extern void moyou_spline_spu_recomp_register(void);
 extern void moyou_particles_spu_recomp_register(void);
 
 typedef void (*Function)(spu_context*);
+/* Shared after moyou_spu_open: translations and the original image. Each thread
+ * executes in its own context; moyou_spu_publish/attach copy a prepared one. */
 static Function functions[SPU_LS_SIZE / 4];
 static uint8_t original[SPU_LS_SIZE];
-static spu_context context;
-static jmp_buf escape;
-static uint64_t instructions, budget;
-static uint32_t stop_address, stop_code;
-static const char* failure;
+static SPU_THREAD_LOCAL spu_context context;
+static SPU_THREAD_LOCAL jmp_buf escape;
+static SPU_THREAD_LOCAL uint64_t instructions, budget;
+static SPU_THREAD_LOCAL uint32_t stop_address, stop_code;
+static SPU_THREAD_LOCAL const char* failure;
+static spu_context published;
+static int publishedReady;
 
 volatile int g_spu_direct = 0;
 int g_spu_ls_watch_n = 0;
@@ -146,6 +150,21 @@ int moyou_spu_call(uint32_t entry, uint64_t limit) {
     if (setjmp(escape)) return 0;
     spu_indirect_branch(&context);
     spu_drain_call(&context, stop_address);
+    return 1;
+}
+
+int moyou_spu_publish(void) {
+    memcpy(&published, &context, sizeof context);
+    published.ls = published.ls_store;
+    publishedReady = 1;
+    return 1;
+}
+
+int moyou_spu_attach(void) {
+    if (!publishedReady) { failure = "No published original SPU context"; return 0; }
+    memcpy(&context, &published, sizeof context);
+    context.ls = context.ls_store;
+    failure = NULL;
     return 1;
 }
 

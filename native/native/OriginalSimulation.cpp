@@ -5,6 +5,7 @@
 #include <QMatrix4x4>
 #include <algorithm>
 #include <cmath>
+#include <future>
 #include <cstdio>
 #include <stdexcept>
 
@@ -73,13 +74,32 @@ OriginalSimulation::OriginalSimulation(const QString& shaders, const QString& re
 }
 
 void OriginalSimulation::deformation(float time) {
+    requestDeformation(time);
+    collectDeformation();
+}
+
+// The FFD lattice for the next update is read back asynchronously: requested at the end
+// of one step, collected at the start of the next, so the GPU does not stall the CPU.
+void OriginalSimulation::requestDeformation(float time) {
     ffd_->uniform("deformation","_Time",QJsonArray{time});
-    auto values = ffd_->captureFloat(QSize(128,1));
+    ffd_->requestFloat(QSize(128,1));
+    deformationPending_ = true;
+}
+
+void OriginalSimulation::collectDeformation() {
+    if (!deformationPending_) return;
+    const auto values = ffd_->collectFloat();
     for (unsigned n = 0; n < 128; ++n) for (unsigned c = 0; c < 4; ++c) lattice_[n][c] = values[n * 4 + c];
+    deformationPending_ = false;
+}
+
+OriginalSimulation::~OriginalSimulation() {
+    if (particleJob_.valid()) particleJob_.wait();
 }
 
 OriginalSimulation::Frame OriginalSimulation::step(double seconds, QSize size) {
     rope_->advance(seconds);
+    collectDeformation();
     surface_->lattice(lattice_,scale1_,scale2_,offset_);
     QMatrix4x4 projection;
     projection.perspective(53.0f,float(size.width()) / size.height(),0.1f,1000.0f);
@@ -105,15 +125,22 @@ OriginalSimulation::Frame OriginalSimulation::step(double seconds, QSize size) {
     // Particles emit from the world-space ribbon: inverse camera projection of the clip-space mesh.
     RopeSolver::Matrix columns;
     std::copy_n(projection.inverted().constData(),16,columns.begin());
-    rope_->emitParticles(particleLayer_,evaluated,128,128,columns);
-    rope_->stepParticles(particles_,float(seconds));
-    frame.particles = rope_->particleVertices(particles_);
-    frame.particleUniforms = rope_->particleUniforms(particles_);
+    // Particles run beside the next rope/surface update; a frame carries the particles
+    // of the previous update (the firmware double-buffers particle vertices too).
+    Particles previous;
+    if (particleJob_.valid()) previous = particleJob_.get();
+    particleJob_ = std::async(std::launch::async,[this,grid = std::move(evaluated),columns,seconds] {
+        rope_->emitParticles(particleLayer_,grid,128,128,columns);
+        rope_->stepParticles(particles_,float(seconds));
+        return Particles{rope_->particleVertices(particles_),rope_->particleUniforms(particles_)};
+    });
+    frame.particles = std::move(previous.vertices);
+    frame.particleUniforms = std::move(previous.uniforms);
     std::copy_n(projection.constData(),16,frame.projection.begin());
     frame.view = view;
     auto exposure = rope_->exposure(hdr_.at("EXPOSURE"),hdr_.at("WHITELEVEL"),hdr_.at("GLARETHRESH"),1,1.0f/255);
     frame.exposure = std::move(exposure.rgba);
     frame.noise = std::move(exposure.noise);
-    deformation(rope_->time() * 10.0f);
+    requestDeformation(rope_->time() * 10.0f);
     return frame;
 }

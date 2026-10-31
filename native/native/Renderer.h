@@ -16,6 +16,9 @@ public:
     void render(GLuint destination, QSize size);
     QImage capture(QSize size);
     std::vector<float> captureFloat(QSize size);
+    // Asynchronous float capture: render and start a PBO read; collect waits for it.
+    void requestFloat(QSize size);
+    std::vector<float> collectFloat();
     void mesh(const std::vector<float>& vertices);
     // Original particle records: 8 floats each (position+size, rotation), drawn as instanced quads.
     void particles(const std::vector<float>& records);
@@ -43,6 +46,10 @@ private:
     GLsizei indexCount_=0, particleCount_=0;
     GLuint particleRecords_=0, particleCorners_=0;
     unsigned particleMask_=~0u;
+    Target readTarget_;
+    GLuint readBuffer_=0;
+    GLsync readFence_=nullptr;
+    QSize readSize_;
     QString root_;
     QJsonObject graph_;
 };

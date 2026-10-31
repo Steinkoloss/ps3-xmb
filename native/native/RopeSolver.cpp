@@ -29,7 +29,7 @@ PPU_THREAD_LOCAL void (*g_trampoline_fn)(void*) = nullptr;
 
 namespace {
 constexpr uint32_t imageBase = 0x02000000, object = 0x01000000, deformer = 0x01001000;
-constexpr uint32_t stack = 0x01ff0000, arrays = 0x01010000;
+constexpr uint32_t stack = 0x01ff0000, particleStack = 0x01f80000, arrays = 0x01010000;
 constexpr uint32_t menu = 0x01002000, controller = 0x01004000, handle = 0x01005000;
 constexpr uint32_t heapBase = 0x01100000;
 // Particle system object and its allocations (firmware new/memalign).
@@ -47,9 +47,9 @@ uint32_t heapCursor = heapBase;
 std::map<uint32_t, RopeSolver::Texture> capturedTextures;
 std::map<uint32_t, std::array<uint32_t, 4>> lockedTextures;
 
-void check(uint64_t address, size_t size, bool write = false) {
+bool allowed(uint64_t address, size_t size, bool write) {
     const auto end = address + size;
-    bool valid = end >= address && ((address >= 0x10000 && end <= 0x800000 && !write) ||
+    return end >= address && ((address >= 0x10000 && end <= 0x800000 && !write) ||
         // Unrelocated variable imports (lis rX,0): instance counters of other modules.
         (address >= 0x10 && end <= 0x100) ||
         (address >= object && end <= 0x01020000) ||
@@ -58,7 +58,26 @@ void check(uint64_t address, size_t size, bool write = false) {
         (address >= 0x01f00000 && end <= 0x02000000) ||
         (address >= imageBase && end <= imageBase + renderer_image_size &&
             (!write || address >= imageBase + 0x9f000)));
-    if (!valid) throw std::runtime_error("Original rope accessed an unadapted guest address: " + std::to_string(address));
+}
+
+// 4 KiB pages wholly inside one permitted region (bit 0 read, bit 1 write); other
+// accesses take the exact region test.
+std::array<uint8_t, 0x04000000 / 0x1000> pagePermissions{};
+void buildPagePermissions() {
+    for (uint64_t page = 0; page < pagePermissions.size(); ++page)
+        pagePermissions[page] = uint8_t(allowed(page << 12, 0x1000, false) | allowed(page << 12, 0x1000, true) << 1);
+}
+
+[[gnu::noinline, gnu::cold]] void checkExact(uint64_t address, size_t size, bool write) {
+    if (!allowed(address, size, write))
+        throw std::runtime_error("Original rope accessed an unadapted guest address: " + std::to_string(address));
+}
+
+inline void check(uint64_t address, size_t size, bool write = false) {
+    const auto page = address >> 12;
+    if (page < pagePermissions.size() && ((address + size - 1) >> 12) == page &&
+        (pagePermissions[page] & (write ? 2 : 1))) return;
+    checkExact(address, size, write);
 }
 
 void load(const std::string& path, uint32_t destination, size_t size, const uint8_t* expected) {
@@ -97,26 +116,28 @@ extern "C" {
 uint8_t vm_read8(uint64_t address) { check(address, 1); return vm_base[address]; }
 uint16_t vm_read16(uint64_t address) {
     check(address, 2);
-    return uint16_t(vm_base[address]) << 8 | vm_base[address + 1];
+    uint16_t v; std::memcpy(&v, vm_base + address, 2); return __builtin_bswap16(v);
 }
 uint32_t vm_read32(uint64_t address) {
     check(address, 4);
-    return uint32_t(vm_base[address]) << 24 | uint32_t(vm_base[address + 1]) << 16 |
-        uint32_t(vm_base[address + 2]) << 8 | vm_base[address + 3];
+    uint32_t v; std::memcpy(&v, vm_base + address, 4); return __builtin_bswap32(v);
 }
-uint64_t vm_read64(uint64_t address) { return uint64_t(vm_read32(address)) << 32 | vm_read32(address + 4); }
+uint64_t vm_read64(uint64_t address) {
+    check(address, 8);
+    uint64_t v; std::memcpy(&v, vm_base + address, 8); return __builtin_bswap64(v);
+}
 void vm_write8(uint64_t address, uint8_t value) { check(address, 1, true); vm_base[address] = value; }
 void vm_write16(uint64_t address, uint16_t value) {
     check(address, 2, true);
-    for (unsigned i = 0; i < 2; ++i) vm_base[address + i] = value >> (8 - i * 8);
+    value = __builtin_bswap16(value); std::memcpy(vm_base + address, &value, 2);
 }
 void vm_write32(uint64_t address, uint32_t value) {
     check(address, 4, true);
-    for (unsigned i = 0; i < 4; ++i) vm_base[address + i] = value >> (24 - i * 8);
+    value = __builtin_bswap32(value); std::memcpy(vm_base + address, &value, 4);
 }
 void vm_write64(uint64_t address, uint64_t value) {
     check(address, 8, true);
-    for (unsigned i = 0; i < 8; ++i) vm_base[address + i] = value >> (56 - i * 8);
+    value = __builtin_bswap64(value); std::memcpy(vm_base + address, &value, 8);
 }
 #if __has_include("moyou_rope_dispatch.inc")
 const std::map<uint32_t, void (*)(ppu_context*)> lifted = {
@@ -309,7 +330,9 @@ void ps3_hle_call(unsigned nid, ppu_context* ctx) {
 }
 
 struct RopeSolver::State {
-    ppu_context cpu{};
+    // Rope/tone calls and particle calls run on separate threads with separate
+    // contexts and stacks; they write disjoint guest memory.
+    ppu_context cpu{}, particleCpu{};
     State() {
         if (vm_base) throw std::runtime_error("The CPU baseline currently permits one rope instance");
         auto* memory = mmap(nullptr, ppu_vm_size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -326,8 +349,11 @@ struct RopeSolver::State {
         cpu.gpr[1] = stack;
         cpu.gpr[2] = 0x020a7d70;
         cpu.vscr = 0x10000;
+        particleCpu = cpu;
+        particleCpu.gpr[1] = particleStack;
         heapCursor = heapBase;
         particleCursor = particleBase;
+        buildPagePermissions();
         capturedTextures.clear();
         lockedTextures.clear();
     }
@@ -452,7 +478,7 @@ RopeSolver::Matrix RopeSolver::multiply(const Matrix& left, const Matrix& right)
 }
 
 uint32_t RopeSolver::createParticles(unsigned capacity) {
-    auto& cpu = state_->cpu;
+    auto& cpu = state_->particleCpu;
     const auto system = particleAllocate(0x1980, 0x80), handles = particleAllocate(16, 16);
     // Both handles name one memory manager whose vtable slot 5 allocates natively.
     const auto manager = particleAllocate(0x40, 16), vtable = particleAllocate(0x40, 16), opd = particleAllocate(16, 16);
@@ -543,14 +569,14 @@ void RopeSolver::emitParticles(uint32_t layer, const std::vector<std::array<floa
     vm_write32(layer + 0x44, width);
     vm_write32(layer + 0x48, height);
     for (unsigned i = 0; i < 16; ++i) writeFloat(layer + 0x50 + i * 4, columns[i]);
-    auto& cpu = state_->cpu;
+    auto& cpu = state_->particleCpu;
     cpu.gpr[3] = layer;
     moyou_rope_func_02030B80(&cpu); drain(&cpu);
     ++ticks;
 }
 
 RopeSolver::ParticleUniforms RopeSolver::particleUniforms(uint32_t system) {
-    auto& cpu = state_->cpu;
+    auto& cpu = state_->particleCpu;
     // qgl context (unrelocated global 0x34) with one identity modelview and its cached inverse.
     if (!vm_read32(0x34)) {
         const auto context = particleAllocate(0x400, 16), entry = particleAllocate(0x100, 16);
@@ -596,7 +622,7 @@ RopeSolver::ParticleUniforms RopeSolver::particleUniforms(uint32_t system) {
 }
 
 unsigned RopeSolver::stepParticles(uint32_t system, float seconds) {
-    auto& cpu = state_->cpu;
+    auto& cpu = state_->particleCpu;
     // ParticlesLayer frame (0x02031f44): live block from the menu copy, then the PPU path.
     std::memmove(vm_base + system + 0x1360, vm_base + system + 0x1490, 0x128);
     writeFloat(system + 0x1358, seconds);
@@ -643,7 +669,38 @@ std::array<RopeSolver::Texture, 2> RopeSolver::textures() {
     return {capturedTextures.at(0x2001),capturedTextures.at(0x2002)};
 }
 
+// Dither noise of the original exposure update 0x02071794 (loop at 0x02071ba4): the
+// same RNG word (tone+0x150), hash, single-precision steps and byte packing.
+std::vector<uint8_t> RopeSolver::exposureNoise() {
+    std::vector<uint8_t> noise(32 * 32 * 4);
+    uint32_t state = vm_read32(toneObject + 0x150);
+    const float dither = readFloat(toneObject + 0x2dc);
+    for (unsigned pixel = 0; pixel < 32 * 32; ++pixel) {
+        const uint32_t n = ++state, v = n ^ (n << 13);
+        const uint32_t hash = (v * (v * v * 15731u + 789221u) + 1376312589u) & 0x7fffffffu;
+        float f = std::fma(float(hash), -9.31322574615478515625e-10f, 1.0f);
+        f = std::fma(f, 0.5f, 0.5f);
+        f = f * dither;
+        f = f * 8.0f;
+        if (f < -1.0f) f = -1.0f; else if (f > 1.0f) f = 1.0f;
+        const float scaled = f * 255.0f;
+        const auto byte = uint8_t(int32_t(scaled));   // fctiwz, low byte
+        noise[pixel * 4] = noise[pixel * 4 + 1] = noise[pixel * 4 + 2] = byte;
+        noise[pixel * 4 + 3] = 0;
+    }
+    vm_write32(toneObject + 0x150, state);
+    return noise;
+}
+
 RopeSolver::ExposureTables RopeSolver::exposure(float value, float white, float threshold, float gamma, float dither) {
+    // The lookup tables depend only on these inputs; reuse them and generate the
+    // per-frame noise natively (checked against the original by --noise-check).
+    const std::array<float, 5> inputs{value, white, threshold, gamma, dither};
+    if (exposureCache_ && exposureInputs_ == inputs) {
+        ExposureTables tables = *exposureCache_;
+        tables.noise.rgba = exposureNoise();
+        return tables;
+    }
     writeFloat(toneObject + 0x29c, value);
     writeFloat(toneObject + 0x2a0, white);
     writeFloat(toneObject + 0x2a8, threshold);
@@ -682,7 +739,21 @@ RopeSolver::ExposureTables RopeSolver::exposure(float value, float white, float 
     }
     const auto address = lockedTextures.at(0x3003)[0];
     tables.noise = {32,32,std::vector<uint8_t>(vm_base + address, vm_base + address + 32 * 32 * 4)};
+    exposureCache_ = std::make_unique<ExposureTables>(tables);
+    exposureInputs_ = inputs;
     return tables;
+}
+
+bool RopeSolver::checkExposureNoise(unsigned frames) {
+    for (unsigned frame = 0; frame < frames; ++frame) {
+        const auto saved = vm_read32(toneObject + 0x150);
+        const auto native = exposureNoise();
+        vm_write32(toneObject + 0x150, saved);
+        exposureCache_.reset();
+        const auto original = exposure(exposureInputs_[0], exposureInputs_[1], exposureInputs_[2], exposureInputs_[3], exposureInputs_[4]);
+        if (original.noise.rgba != native) return false;
+    }
+    return true;
 }
 
 RopeSolver::GlareWeights RopeSolver::glareWeights(Vector radii, float sumPower, float level) {

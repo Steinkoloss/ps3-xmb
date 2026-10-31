@@ -163,6 +163,7 @@ void OriginalDisplay::show(const OriginalSimulation::Frame& frame, QSize size) {
     display_->texture("noise",QSize(32,32),frame.noise.rgba.data(),false,true);
     display_->uniform("composition","_ScreenSizeRecip",QJsonArray{1.0/size.width(),1.0/size.height()});
     display_->particles(frame.particles);
+    if (frame.particles.empty()) return;
     const auto& u = frame.particleUniforms;
     display_->particleMask(u.passes);
     const auto array = [](const auto& values, int count) { QJsonArray out; for (int i = 0; i < count; ++i) out.append(values[i]); return out; };

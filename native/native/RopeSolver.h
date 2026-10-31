@@ -31,6 +31,8 @@ public:
     Matrix multiply(const Matrix& left, const Matrix& right);
     std::array<Texture, 2> textures();
     ExposureTables exposure(float exposure, float white, float threshold, float gamma, float dither);
+    // Compares native noise with the original exposure update for successive frames.
+    bool checkExposureNoise(unsigned frames);
     GlareWeights glareWeights(Vector radii, float sumPower, float level);
     // Original particle system (PPU path); returns its guest address.
     uint32_t createParticles(unsigned capacity);
@@ -53,6 +55,9 @@ public:
     std::vector<float> particleVertices(uint32_t system) const;
     uint32_t guestWord(uint32_t address) const;  // development inspection
 private:
+    std::vector<uint8_t> exposureNoise();
     struct State;
     std::unique_ptr<State> state_;
+    std::unique_ptr<ExposureTables> exposureCache_;
+    std::array<float, 5> exposureInputs_{};
 };
