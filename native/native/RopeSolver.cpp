@@ -41,7 +41,7 @@ std::array<uint32_t, 2> vertexBuffers{};
 // qgl_base (dev_flash/vsh/module/qglbase.sprx) random 0x2e67e2d8 at 0x5f578: a shared
 // counter (bss, 0 at load) hashed like the exposure noise; tick 0xd15d6a2c at 0x4dfa0 is a
 // per-frame counter. On the console both also advance for other qgl users.
-uint32_t randomState = 0, ticks = 0, gridData = 0;
+uint32_t randomState = 0, ticks = 0, gridData = 0, uniformObjects = 0;
 constexpr uint32_t toneObject = 0x01008000;
 constexpr std::array<uint32_t, 7> arrayFields = {0x44,0x74,0xa4,0xd4,0x104,0x134,0x164};
 constexpr uint32_t arrayBytes = 361 * 16;
@@ -175,14 +175,45 @@ void ps3_indirect_call(ppu_context* ctx) {
         throw std::runtime_error("Original CPU indirect call leaves the lifted closure: " + std::to_string(uint32_t(ctx->ctr)));
     function->second(ctx);
 }
+// Firmware new/delete and heap alloc/free in the particle arena: first fit over freed
+// blocks (coalesced), else the bump cursor.
+std::map<uint32_t, uint32_t> particleBlocks, particleFree;
 uint32_t particleAllocate(uint64_t bytes, uint64_t alignment) {
     if (alignment < 16) alignment = 16;
     if (alignment & (alignment - 1) || alignment > 0x10000) throw std::runtime_error("Unadapted original allocation alignment");
+    bytes = std::max<uint64_t>(16, (bytes + 15) & ~uint64_t(15));
+    for (auto block = particleFree.begin(); block != particleFree.end(); ++block) {
+        const uint64_t start = block->first, end = start + block->second;
+        const uint64_t address = (start + alignment - 1) & ~(alignment - 1);
+        if (address + bytes > end) continue;
+        particleFree.erase(block);
+        if (address > start) particleFree[uint32_t(start)] = uint32_t(address - start);
+        if (address + bytes < end) particleFree[uint32_t(address + bytes)] = uint32_t(end - address - bytes);
+        particleBlocks[uint32_t(address)] = uint32_t(bytes);
+        std::memset(vm_base + address, 0, bytes);
+        return uint32_t(address);
+    }
     const uint64_t address = (particleCursor + alignment - 1) & ~(alignment - 1);
     if (bytes > particleEnd - address) throw std::runtime_error("Original particle allocations exceed native arena");
+    if (address > particleCursor) particleFree[particleCursor] = uint32_t(address - particleCursor);
     particleCursor = uint32_t(address + bytes);
+    particleBlocks[uint32_t(address)] = uint32_t(bytes);
     std::memset(vm_base + address, 0, bytes);
     return uint32_t(address);
+}
+void particleRelease(uint64_t address) {
+    if (!address) return;
+    auto block = particleBlocks.find(uint32_t(address));
+    if (block == particleBlocks.end()) throw std::runtime_error("Original code freed an unknown allocation: " + std::to_string(address));
+    uint32_t start = block->first, size = block->second;
+    particleBlocks.erase(block);
+    auto next = particleFree.lower_bound(start);
+    if (next != particleFree.end() && next->first == start + size) { size += next->second; next = particleFree.erase(next); }
+    if (next != particleFree.begin()) {
+        auto previous = std::prev(next);
+        if (previous->first + previous->second == start) { start = previous->first; size += previous->second; particleFree.erase(previous); }
+    }
+    particleFree[start] = size;
 }
 void ps3_indirect_call_to(ppu_context*, uint32_t) { throw std::runtime_error("Unadapted original CPU indirect target"); }
 // One guest thread per context and no sharing: lightweight mutex lock (0x66) / unlock (0x68) succeed.
@@ -246,11 +277,11 @@ void ps3_hle_call(unsigned nid, ppu_context* ctx) {
     }
     case 0x83b2cc6f: ctx->gpr[3] = particleAllocate(ctx->gpr[3], 16); return;            // operator new
     case 0xed3da02b: ctx->gpr[3] = particleAllocate(ctx->gpr[3], ctx->gpr[4]); return;   // aligned new
-    case 0xd84b3689: return;                                                           // delete: arena
+    case 0xd84b3689: particleRelease(ctx->gpr[3]); return;                             // delete
     case 0xf3b69a9a: ctx->gpr[3] = 1; return;                                          // common heap handle
     case 0x9308c8c0: ctx->gpr[3] = particleAllocate(ctx->gpr[5], ctx->gpr[4]); return;   // heap alloc (named)
     case 0x89c88658: ctx->gpr[3] = particleAllocate(ctx->gpr[5], ctx->gpr[4]); return;   // heap alloc
-    case 0xaddb8a27: return;                                                           // heap free: arena
+    case 0xaddb8a27: particleRelease(ctx->gpr[4]); return;                             // heap free
     case 0xad4384f2: ctx->gpr[3] = particleAllocate(ctx->gpr[4], 16); return;            // heap alloc (queue)
     // GPU resource setup for the particle draw; the native renderer owns these.
     case 0x1e3764f7: ctx->gpr[3] = particleAllocate(0x40, 16); return;                 // buffer object
@@ -379,7 +410,12 @@ struct RopeSolver::State {
         particleCpu = cpu;
         particleCpu.gpr[1] = particleStack;
         heapCursor = heapBase;
+        // Per-instance state: a restarted simulation must not inherit the previous one.
         particleCursor = particleBase;
+        particleBlocks.clear();
+        particleFree.clear();
+        vertexBuffers = {};
+        ::randomState = ticks = gridData = uniformObjects = 0;
         buildPagePermissions();
         capturedTextures.clear();
         lockedTextures.clear();
@@ -649,11 +685,14 @@ RopeSolver::ParticleUniforms RopeSolver::particleUniforms(uint32_t system) {
         vm_write32(context + 0x48 + 0x10, 1);
         vm_write32(0x34, context);
     }
-    const auto vertex = particleAllocate(0x400, 16), fragment = particleAllocate(0x400, 16), handles = particleAllocate(16, 16);
+    // Uniform objects are reused every frame (reset to zero) rather than allocated.
+    if (!uniformObjects) uniformObjects = particleAllocate(0x900, 16);
+    std::memset(vm_base + uniformObjects, 0, 0x900);
+    const auto vertex = uniformObjects, fragment = uniformObjects + 0x400, handles = uniformObjects + 0x800;
     vm_write32(handles, vertex);
     vm_write32(handles + 4, fragment);
     // Unbound uniform objects (binding record +0xc == 0): setters keep values, skip uploads.
-    const auto unbound = particleAllocate(0x40, 16);
+    const auto unbound = uniformObjects + 0x840;
     for (uint32_t offset : {0x30u,0x90u,0xf0u,0x150u,0x180u,0x1e0u,0x210u,0x240u,0x270u,0x2a0u,0x2d0u,0x300u,0x330u,0x360u})
         vm_write32(vertex + offset + 4, unbound);
     for (uint32_t offset : {0x30u,0x50u,0xb0u,0xe0u,0x100u,0x160u,0x190u}) vm_write32(fragment + offset + 4, unbound);

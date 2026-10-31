@@ -9,6 +9,7 @@
 #include <QQuickOpenGLUtils>
 #include <QQuickWindow>
 #include <QStandardPaths>
+#include <QTimer>
 #include <algorithm>
 #include <atomic>
 #include <functional>
@@ -27,6 +28,8 @@ struct XmbChannel {
     uint64_t frameId = 0, consumed = 0;
     // Wakes the simulation when the renderer takes a frame.
     std::function<void()> taken;
+    // Reports a renderer failure to the item (queued to the GUI thread).
+    std::function<void(QString)> failed;
 };
 
 class XmbSimulator {
@@ -37,6 +40,9 @@ public:
         channel_->reference = root.filePath("reference");
         channel_->preset = preset;
         channel_->taken = [this] { { std::lock_guard lock(control_); } wake_.notify_all(); };
+        channel_->failed = [item](const QString& message) {
+            QMetaObject::invokeMethod(item,"fail",Qt::QueuedConnection,Q_ARG(QString,message));
+        };
         surface_.setFormat(format());
         surface_.create();
         thread_ = std::thread([this, cpu = root.filePath("cpu"), spline = root.filePath("spline/original-ls.bin")] { run(cpu,spline); });
@@ -141,8 +147,8 @@ public:
         if (channel_ && !failed_) {
             try { drawn = draw(size); }
             catch (const std::exception& error) {
-                qWarning("PS3 XMB background stopped: %s",error.what());
                 failed_ = true; display_.reset();
+                if (channel_->failed) channel_->failed(QString::fromUtf8(error.what()));
             }
         }
         framebufferObject()->bind();
@@ -266,6 +272,7 @@ void XmbItem::restart() {
     // The base menus lack the background's day/night entries; the console always applies a
     // set, so an unset preset means the day set.
     simulator_ = std::make_unique<XmbSimulator>(this,data,preset_.isEmpty() ? QStringLiteral("day") : preset_);
+    QTimer::singleShot(120000,this,[this] { if (error_.isEmpty()) retryDelay_ = 2; });
     const auto ratio = window() ? window()->effectiveDevicePixelRatio() : 1.0;
     simulator_->setSize((size() * ratio).toSize());
     simulator_->setRunning(running_);
@@ -274,7 +281,10 @@ void XmbItem::restart() {
 }
 
 void XmbItem::fail(const QString& message) {
-    qWarning("PS3 XMB background: %s",qUtf8Printable(message));
+    // Keep the wallpaper alive: restart the simulation, backing off on repeated failures.
+    qWarning("PS3 XMB background: %s; restarting in %d s",qUtf8Printable(message),retryDelay_);
     error_ = message;
     emit errorChanged();
+    QTimer::singleShot(retryDelay_ * 1000,this,[this] { restart(); });
+    retryDelay_ = std::min(retryDelay_ * 2,60);
 }

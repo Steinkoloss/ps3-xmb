@@ -66,5 +66,6 @@ private:
     bool running_ = true;
     int frameRate_ = 60;
     bool glints_ = false;
+    int retryDelay_ = 2;
     std::unique_ptr<XmbSimulator> simulator_;
 };
