@@ -103,11 +103,13 @@ OriginalSimulation::Frame OriginalSimulation::step(double seconds, QSize size) {
     surface_->lattice(lattice_,scale1_,scale2_,offset_);
     QMatrix4x4 projection;
     projection.perspective(53.0f,float(size.width()) / size.height(),0.1f,1000.0f);
-    // The original camera (FOV 0.925 rad, near 0.1, far 1000) looks from (0,0,2) towards (0,0,-7).
+    // The ribbon uses its projection with the model matrix; the particle layer draws through
+    // the original camera (0x02024a68: FOV 0.925 rad, eye (0,0,2), target (0,0,-7)).
     const auto view = rope_->cameraView();
+    const QMatrix4x4 ribbonProjection = projection;
     projection *= QMatrix4x4(view.data()).transposed();
     RopeSolver::Matrix p;
-    std::copy_n(projection.constData(),16,p.begin());
+    std::copy_n(ribbonProjection.constData(),16,p.begin());
     auto matrix = rope_->multiply(p,model_);
     auto clip = surface_->project(rope_->positions(),matrix);
     auto evaluated = surface_->subdivide(clip);

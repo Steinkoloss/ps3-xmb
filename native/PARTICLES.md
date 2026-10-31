@@ -17,10 +17,15 @@ bit1 second. Matrix uniforms go up as rows (transpose of vectormath memory) — 
 untransposed LightPack renders nothing, MVP rows put particles on the ribbon.
 
 Camera: the original camera (constructor 0x02024a68) has FOV 0.925 rad (53°), near 0.1,
-far 1000, eye (0,0,2), target (0,0,-7), up (0,1,0) (constants at 0x02093730). The port had
-the FOV but no view; now the ribbon is drawn with P·V·M, particles with MVP P·V and
-Modelview V, the emission grid uses inv(P·V), and qgl 0xc2c9c741 is Matrix4::lookAt on the
-camera vectors. With the view, particles fall in the _Focus band and the quads pass
+far 1000, eye (0,0,2), target (0,0,-7), up (0,1,0) (constants at 0x02093730). The ribbon keeps
+its projection with the model matrix (drawing it through the view shrank it against the
+capture); particles use MVP P·V and Modelview V, and the emission grid uses inv(P·V) on
+the ribbon's clip-space mesh, so particles land on the ribbon on screen while their
+camera distances span 5.3-13 (19% in the near-blur range). qgl 0xc2c9c741 is
+Matrix4::lookAt on the camera vectors.
+
+Open: the console shows more depth variety (soft out-of-focus dots, a denser trail
+cluster); ours stay close to the ribbon's depth with little near/far bokeh. With the view, particles fall in the _Focus band and the quads pass
 matches the console capture.
 
 Layer: the original ParticlesLayer constructor (0x020322b8, camera handle) builds the
