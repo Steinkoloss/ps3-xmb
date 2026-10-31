@@ -8,6 +8,16 @@ qt_add_executable(moyou-preview native/main.cpp native/GlProgram.cpp native/Rend
 target_link_libraries(moyou-preview PRIVATE Qt6::Gui Qt6::OpenGL)
 target_compile_options(moyou-preview PRIVATE -Wall -Wextra -Wpedantic -ffp-contract=off -fno-fast-math)
 
+# Guest translations keep strict IEEE flags at every level; -O0 is the reference build.
+# x86-64-v2 enables ps3recomp's SSE4.1 shuffles without FMA/AVX code generation.
+set(MOYOU_GUEST_OPTIMIZATION "-O2;-march=x86-64-v2" CACHE STRING "Optimization flags for original-code translations")
+# LTO inlines the per-instruction SPU checks into the translations.
+if(NOT DEFINED CMAKE_INTERPROCEDURAL_OPTIMIZATION)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT MOYOU_IPO)
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ${MOYOU_IPO})
+endif()
+
 set(MOYOU_CPU_DIRECTORY "" CACHE PATH "Private original CPU translations from lift_rope.py")
 if(MOYOU_CPU_DIRECTORY)
     find_package(OpenSSL REQUIRED COMPONENTS Crypto)
@@ -16,7 +26,7 @@ if(MOYOU_CPU_DIRECTORY)
     target_include_directories(moyou-rope PRIVATE native ${MOYOU_CPU_DIRECTORY})
     target_compile_definitions(moyou-rope PRIVATE PPU_NO_INLINE_LOADS PPU_NO_INLINE_STORES)
     target_link_libraries(moyou-rope PRIVATE OpenSSL::Crypto)
-    target_compile_options(moyou-rope PRIVATE -O0 -ffp-contract=off -fno-fast-math -fwrapv -fno-strict-aliasing)
+    target_compile_options(moyou-rope PRIVATE ${MOYOU_GUEST_OPTIMIZATION} -ffp-contract=off -fno-fast-math -fwrapv -fno-strict-aliasing)
     qt_add_executable(moyou-rope-checkpoint native/rope_main.cpp)
     target_link_libraries(moyou-rope-checkpoint PRIVATE moyou-rope Qt6::Gui)
 endif()
@@ -31,7 +41,7 @@ if(MOYOU_SPU_DIRECTORY)
     target_include_directories(moyou-spu PRIVATE native ${MOYOU_SPU_DIRECTORY}
         ${MOYOU_RECOMPILER_DIRECTORY}/runtime ${MOYOU_RECOMPILER_DIRECTORY}/include)
     target_compile_definitions(moyou-spu PRIVATE MOYOU_SPU_LIBRARY SPU_SCALAR_HELPERS SPU_SCALAR_INT)
-    target_compile_options(moyou-spu PRIVATE -O0 -ffp-contract=off -fno-fast-math -fwrapv -fno-strict-aliasing)
+    target_compile_options(moyou-spu PRIVATE ${MOYOU_GUEST_OPTIMIZATION} -ffp-contract=off -fno-fast-math -fwrapv -fno-strict-aliasing)
     target_link_libraries(moyou-spu PRIVATE OpenSSL::Crypto m)
     add_library(moyou-surface STATIC native/SurfaceEvaluator.cpp)
     target_link_libraries(moyou-surface PRIVATE moyou-spu)

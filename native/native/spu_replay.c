@@ -76,7 +76,9 @@ void spu_img_restore(spu_context* ctx, int32_t image) {
     if (ctx->image_id != image) fail("Unexpected SPU overlay switch");
 }
 
-void spu_trace_pc(spu_context* ctx, uint32_t pc) {
+/* Runs before every translated instruction; LTO inlines it into the translations. */
+void spu_trace_pc(spu_context* ctx, uint32_t pc);
+__attribute__((always_inline)) inline void spu_trace_pc(spu_context* ctx, uint32_t pc) {
     ctx->pc = pc;
     if (instructions == budget) fail("Instruction budget exceeded");
     ++instructions;

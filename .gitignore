@@ -1,0 +1,4 @@
+# Local firmware inputs, generated translations and build trees
+build/
+__pycache__/
+node_modules/
