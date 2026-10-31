@@ -16,43 +16,45 @@
 #include <functional>
 #include <chrono>
 #include <condition_variable>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <thread>
 
-// Hand-over between the simulation thread and the scene-graph renderer.
+// Hand-over between the simulation thread and the scene-graph renderers.
 struct XmbChannel {
     std::mutex mutex;
     QString shaders, reference, preset;
     std::optional<OriginalSimulation::Constants> constants;
-    OriginalSimulation::Frame frame;
+    std::shared_ptr<const OriginalSimulation::Frame> frame;   // latest; every screen reads it
     uint64_t frameId = 0, consumed = 0;
-    // Wakes the simulation when the renderer takes a frame.
+    // Wakes the simulation when a renderer takes a frame.
     std::function<void()> taken;
-    // Reports a renderer failure to the item (queued to the GUI thread).
+    // Reports a renderer failure to the items (queued to the GUI thread).
     std::function<void(QString)> failed;
 };
 
+// One simulation per process (the translated firmware has a single guest memory), shared
+// by every wallpaper item with the same data and preset; each screen renders its frames.
 class XmbSimulator {
 public:
-    XmbSimulator(XmbItem* item, const QString& data, const QString& preset, double hour) :
-        item_(item), channel_(std::make_shared<XmbChannel>()), hour_(hour) {
-        const QDir root(data);
-        channel_->shaders = root.filePath("shaders");
-        channel_->reference = root.filePath("reference");
-        channel_->preset = preset;
-        channel_->taken = [this] { { std::lock_guard lock(control_); } wake_.notify_all(); };
-        channel_->failed = [item](const QString& message) {
-            QMetaObject::invokeMethod(item,"fail",Qt::QueuedConnection,Q_ARG(QString,message));
+    static std::shared_ptr<XmbSimulator> acquire(const QString& data, const QString& preset, double hour) {
+        static std::map<QString, std::weak_ptr<XmbSimulator>> simulators;
+        auto& slot = simulators[data + QLatin1Char('\n') + preset];
+        if (auto shared = slot.lock()) return shared;
+        std::shared_ptr<XmbSimulator> created(new XmbSimulator(data, preset, hour));
+        // Renderers keep the channel; its callbacks must not outlive the simulator.
+        created->channel_->failed = [weak = std::weak_ptr<XmbSimulator>(created)](const QString& message) {
+            if (auto simulator = weak.lock()) simulator->fail(message);
         };
-        surface_.setFormat(format());
-        surface_.create();
-        thread_ = std::thread([this, cpu = root.filePath("cpu"), spline = root.filePath("spline/original-ls.bin")] { run(cpu,spline); });
+        created->start();
+        slot = created;
+        return created;
     }
     ~XmbSimulator() {
-        { std::lock_guard lock(control_); stop_ = true; }
-        wake_.notify_all();
-        thread_.join();
+        { std::lock_guard lock(control_->mutex); stop_ = true; }
+        control_->wake.notify_all();
+        if (thread_.joinable()) thread_.join();
     }
     static QSurfaceFormat format() {
         QSurfaceFormat format;
@@ -61,14 +63,63 @@ public:
         return format;
     }
     std::shared_ptr<XmbChannel> channel() const { return channel_; }
-    void setSize(QSize size) { width_ = size.width(); height_ = size.height(); }
-    void setRunning(bool running) {
-        { std::lock_guard lock(control_); running_ = running; }
-        wake_.notify_all();
+    // Subscribers (GUI thread): updated after every frame, told about failures. The
+    // simulation runs while any of them runs, sized for the largest.
+    void subscribe(XmbItem* item, QSize size, bool running) {
+        { std::lock_guard lock(items_); subscribers_[item] = {size, running}; }
+        refresh();
     }
-    void setFrameRate(int rate) { frameRate_ = std::clamp(rate, 1, 60); }
+    void unsubscribe(XmbItem* item) {
+        { std::lock_guard lock(items_); subscribers_.erase(item); }
+        refresh();
+    }
+    void setSize(XmbItem* item, QSize size) {
+        { std::lock_guard lock(items_); if (subscribers_.count(item)) subscribers_[item].size = size; }
+        refresh();
+    }
+    void setRunning(XmbItem* item, bool running) {
+        { std::lock_guard lock(items_); if (subscribers_.count(item)) subscribers_[item].running = running; }
+        refresh();
+    }
     void setHour(double hour) { hour_ = hour; }
+    void fail(const QString& message) {
+        std::lock_guard lock(items_);
+        for (const auto& [item, state] : subscribers_)
+            QMetaObject::invokeMethod(item,"fail",Qt::QueuedConnection,Q_ARG(QString,message));
+    }
 private:
+    struct Subscriber { QSize size; bool running = true; };
+    struct Control { std::mutex mutex; std::condition_variable wake; };
+    XmbSimulator(const QString& data, const QString& preset, double hour) :
+        channel_(std::make_shared<XmbChannel>()), control_(std::make_shared<Control>()), root_(data), hour_(hour) {
+        channel_->shaders = root_.filePath("shaders");
+        channel_->reference = root_.filePath("reference");
+        channel_->preset = preset;
+        channel_->taken = [control = control_] { { std::lock_guard lock(control->mutex); } control->wake.notify_all(); };
+        surface_.setFormat(format());
+        surface_.create();
+    }
+    void start() {
+        thread_ = std::thread([this, cpu = root_.filePath("cpu"), spline = root_.filePath("spline/original-ls.bin")] { run(cpu,spline); });
+    }
+    void refresh() {
+        QSize largest;
+        bool running = false;
+        {
+            std::lock_guard lock(items_);
+            for (const auto& [item, state] : subscribers_) {
+                running = running || state.running;
+                if (state.size.width() * state.size.height() > largest.width() * largest.height()) largest = state.size;
+            }
+        }
+        width_ = largest.width(); height_ = largest.height();
+        { std::lock_guard lock(control_->mutex); running_ = running; }
+        control_->wake.notify_all();
+    }
+    void updateItems() {
+        std::lock_guard lock(items_);
+        for (const auto& [item, state] : subscribers_) QMetaObject::invokeMethod(item,"update",Qt::QueuedConnection);
+    }
     void run(const QString& cpu, const QString& spline) {
         try {
             QOpenGLContext context;
@@ -79,13 +130,14 @@ private:
             OriginalSimulation simulation(channel_->shaders,channel_->reference,cpu,spline,channel_->preset,
                 fixed >= 0 ? fixed : QTime::currentTime().msecsSinceStartOfDay() / 3.6e6);
             { std::lock_guard lock(channel_->mutex); channel_->constants = simulation.constants(); }
+            updateItems();
             using Clock = std::chrono::steady_clock;
             auto last = Clock::now(), next = last;
             for (;;) {
                 {
-                    std::unique_lock lock(control_);
+                    std::unique_lock lock(control_->mutex);
                     if (!running_) {
-                        wake_.wait(lock,[&] { return running_ || stop_; });
+                        control_->wake.wait(lock,[&] { return running_ || stop_; });
                         last = next = Clock::now();
                     }
                     if (stop_) break;
@@ -97,20 +149,20 @@ private:
                 if (size.isEmpty()) size = QSize(1920,1080);
                 const double fixed = hour_;
                 simulation.setHour(fixed >= 0 ? fixed : QTime::currentTime().msecsSinceStartOfDay() / 3.6e6);
-                auto frame = simulation.step(seconds,size);
+                auto frame = std::make_shared<const OriginalSimulation::Frame>(simulation.step(seconds,size));
                 {
                     std::lock_guard lock(channel_->mutex);
                     channel_->frame = std::move(frame);
                     ++channel_->frameId;
                 }
-                QMetaObject::invokeMethod(item_,"update",Qt::QueuedConnection);
-                const auto period = std::chrono::nanoseconds(1'000'000'000 / frameRate_.load());
+                updateItems();
+                const auto period = std::chrono::nanoseconds(1'000'000'000 / 60);
                 next = std::max(next + period,Clock::now() - period);
-                std::unique_lock lock(control_);
-                wake_.wait_until(lock,next,[&] { return stop_; });
-                // Simulate only frames that get shown: wait until this one is taken.
-                wake_.wait(lock,[&] {
-                    if (stop_) return true;
+                std::unique_lock lock(control_->mutex);
+                control_->wake.wait_until(lock,next,[&] { return stop_; });
+                // Simulate only frames that get shown: wait until a screen takes this one.
+                control_->wake.wait(lock,[&] {
+                    if (stop_ || !running_) return true;
                     std::lock_guard frameLock(channel_->mutex);
                     return channel_->consumed + 1 >= channel_->frameId;  // one frame in flight
                 });
@@ -118,17 +170,18 @@ private:
             }
             context.doneCurrent();
         } catch (const std::exception& error) {
-            QMetaObject::invokeMethod(item_,"fail",Qt::QueuedConnection,Q_ARG(QString,QString::fromUtf8(error.what())));
+            fail(QString::fromUtf8(error.what()));
         }
     }
-    XmbItem* item_;
     std::shared_ptr<XmbChannel> channel_;
+    std::shared_ptr<Control> control_;
+    QDir root_;
     QOffscreenSurface surface_;
     std::thread thread_;
-    std::mutex control_;
-    std::condition_variable wake_;
-    bool running_ = true, stop_ = false;
-    std::atomic<int> width_{0}, height_{0}, frameRate_{60};
+    std::mutex items_;
+    std::map<XmbItem*, Subscriber> subscribers_;
+    bool running_ = false, stop_ = false;
+    std::atomic<int> width_{0}, height_{0};
     std::atomic<double> hour_{-1};
 };
 
@@ -175,7 +228,7 @@ private:
         const auto now = QDateTime::currentDateTime();
         const unsigned month = month_ > 0 ? unsigned(month_) : unsigned(now.date().month());
         const double hour = hour_ >= 0 ? hour_ : now.time().msecsSinceStartOfDay() / 3.6e6;
-        OriginalSimulation::Frame frame;
+        std::shared_ptr<const OriginalSimulation::Frame> frame;
         uint64_t id;
         {
             std::lock_guard lock(channel_->mutex);
@@ -185,18 +238,18 @@ private:
                 monthShown_ = month; hourShown_ = hour;
             }
             id = channel_->frameId;
-            if (display_ && id != shown_) frame = std::move(channel_->frame);
-            channel_->consumed = id;
+            if (display_ && id != shown_) frame = channel_->frame;
+            channel_->consumed = std::max(channel_->consumed, id);
         }
         if (channel_->taken) channel_->taken();
         if (!display_) return false;
         if (month != monthShown_ || std::abs(hour - hourShown_) > 1.0 / 3600) {
             display_->setTime(month,hour);
             monthShown_ = month; hourShown_ = hour;
-            if (!frame.vertices.empty()) shown_ = 0;
+            if (frame) shown_ = 0;
         }
         display_->setGlints(glints_);
-        if (!frame.vertices.empty()) { display_->show(frame,size); shown_ = id; }
+        if (frame && !frame->vertices.empty()) { display_->show(*frame,size); shown_ = id; }
         else if (!shown_) return false;
         display_->render(framebufferObject()->handle(),size);
         return true;
@@ -213,7 +266,7 @@ private:
 }
 
 XmbItem::XmbItem(QQuickItem* parent) : QQuickFramebufferObject(parent) {}
-XmbItem::~XmbItem() = default;
+XmbItem::~XmbItem() { if (simulator_) simulator_->unsubscribe(this); }
 
 QQuickFramebufferObject::Renderer* XmbItem::createRenderer() const { return new XmbRenderer; }
 
@@ -239,7 +292,7 @@ void XmbItem::setHour(double hour) {
 void XmbItem::setRunning(bool running) {
     if (running == running_) return;
     running_ = running;
-    if (simulator_) simulator_->setRunning(running);
+    if (simulator_) simulator_->setRunning(this, running);
     emit runningChanged();
 }
 
@@ -247,7 +300,6 @@ void XmbItem::setFrameRate(int rate) {
     rate = std::clamp(rate, 1, 60);
     if (rate == frameRate_) return;
     frameRate_ = rate;
-    if (simulator_) simulator_->setFrameRate(rate);
     emit frameRateChanged();
 }
 
@@ -267,12 +319,13 @@ void XmbItem::geometryChange(const QRectF& next, const QRectF& previous) {
     QQuickFramebufferObject::geometryChange(next,previous);
     if (simulator_) {
         const auto ratio = window() ? window()->effectiveDevicePixelRatio() : 1.0;
-        simulator_->setSize((next.size() * ratio).toSize());
+        simulator_->setSize(this, (next.size() * ratio).toSize());
     }
 }
 
 void XmbItem::restart() {
     if (!isComponentComplete()) return;
+    if (simulator_) simulator_->unsubscribe(this);
     simulator_.reset();
     if (!error_.isEmpty()) { error_.clear(); emit errorChanged(); }
     auto data = dataDirectory_;
@@ -280,12 +333,11 @@ void XmbItem::restart() {
     if (data.isEmpty()) { fail("Install the local firmware-derived data to ~/.local/share/ps3-xmb"); return; }
     // The base menus lack the background's day/night entries; the console always applies a
     // set, so an unset preset follows the clock like the console.
-    simulator_ = std::make_unique<XmbSimulator>(this,data,preset_.isEmpty() ? QStringLiteral("clock") : preset_,hour_);
+    simulator_ = XmbSimulator::acquire(data,preset_.isEmpty() ? QStringLiteral("clock") : preset_,hour_);
     QTimer::singleShot(120000,this,[this] { if (error_.isEmpty()) retryDelay_ = 2; });
     const auto ratio = window() ? window()->effectiveDevicePixelRatio() : 1.0;
-    simulator_->setSize((size() * ratio).toSize());
-    simulator_->setRunning(running_);
-    simulator_->setFrameRate(frameRate_);
+    simulator_->subscribe(this,(size() * ratio).toSize(),running_);
+    if (hour_ >= 0) simulator_->setHour(hour_);
     update();
 }
 
