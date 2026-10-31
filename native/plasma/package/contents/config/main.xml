@@ -22,8 +22,8 @@
       <default>60</default>
     </entry>
     <entry name="Glints" type="Bool">
-      <label>Draw the original glint pass (halos currently larger than on the console)</label>
-      <default>false</default>
+      <label>Draw the original glint pass</label>
+      <default>true</default>
     </entry>
   </group>
 </kcfg>

@@ -11,8 +11,10 @@
 
 class GlProgram {
 public:
+    // alphaGreaterZero: RSX alpha test GREATER 0 (cellGcmSetAlphaTestEnable) on an 8-bit target.
     GlProgram(QOpenGLFunctions_4_3_Core& gl, const QString& directory,
-              const QJsonObject& manifest, const QString& vertex, const QString& fragment);
+              const QJsonObject& manifest, const QString& vertex, const QString& fragment,
+              bool alphaGreaterZero = false);
     ~GlProgram();
     GlProgram(const GlProgram&) = delete;
     GlProgram& operator=(const GlProgram&) = delete;

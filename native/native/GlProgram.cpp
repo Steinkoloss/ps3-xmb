@@ -28,7 +28,8 @@ QJsonObject readObject(const QString& path) {
 }
 
 GlProgram::GlProgram(QOpenGLFunctions_4_3_Core& gl, const QString& directory,
-                     const QJsonObject& manifest, const QString& vertex, const QString& fragment) : gl_(gl) {
+                     const QJsonObject& manifest, const QString& vertex, const QString& fragment,
+                     bool alphaGreaterZero) : gl_(gl) {
     vertexMetadata_ = manifest.value(vertex).toObject();
     fragmentMetadata_ = manifest.value(fragment).toObject();
     if (vertexMetadata_.isEmpty() || fragmentMetadata_.isEmpty()) error("Original shader is absent from the manifest");
@@ -39,6 +40,12 @@ GlProgram::GlProgram(QOpenGLFunctions_4_3_Core& gl, const QString& directory,
         auto digest = stage.second.value("glsl_sha256").toString().toLatin1();
         if (digest.size() != 64 || QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex() != digest)
             error("Generated original shader was modified: " + source);
+        if (alphaGreaterZero && stage.first == QOpenGLShader::Fragment) {
+            // Fixed-function alpha test after the original program: the 8-bit alpha must exceed 0.
+            const auto end = bytes.lastIndexOf('}');
+            if (end < 0) error("Unexpected generated fragment program: " + source);
+            bytes.insert(end, "if (!(round(clamp(colour0.a, 0.0, 1.0) * 255.0) > 0.0)) discard;\n");
+        }
         if (!program_.addShaderFromSourceCode(stage.first, bytes)) error(source + ": " + program_.log());
     }
     if (!program_.link()) error("Original program link failed: " + program_.log());

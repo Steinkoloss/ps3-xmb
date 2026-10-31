@@ -33,15 +33,22 @@ constructor defaults. The layer's animated colour (+0xd0/+0xf0) and intensity
 (anim_coldboot_*), not traced; they start at 1 here (the system's neutral values).
 Particle passes render into rgba8 like the composition.
 
-Open: glint pass (draw mask bit 1, firmware default on) still draws large bright halos;
-the console shows only small ones. Established so far:
-- Every fragment/vertex constant it reads is a literal or a set uniform; glare shaders
-  loaded by the renderer (0x0207298c) are the non-MRT ones, so its colour0 is visible.
-- Halo size = base size (focus curve) × |N·H|^specular power × _Glare.y (5.44);
-  ~0.25 world units when aligned. Brightness then blooms through the glare chain.
-- With random orientations there are fewer halos but each is still large and bright,
-  so the per-glint size/brightness is the problem, not only orientation correlation.
-- About a third of particles spin about the initial quaternion's axis (0,0.707,0.707).
+Glint halos (fixed): the particle layer is drawn after the lines layer's glare and tone
+stage, onto the display output. Evidence: the console capture shows sharp sparkles and
+small glints; the layer has its own glare program (particles_second), redundant if its
+output went through the scene glare chain; drawn before glare, every glint core bloomed
+into a large disc. Render state from 0x02060660/0x0205c254 (names via qglbase capability
+map 0x21114 and libgcm NID hashes): cellGcmSetAlphaTestEnable + GREATER 0,
+cellGcmSetBlendEnable ONE/ONE FUNC_ADD, depth test/cull/stencil off, depth mask off. The
+alpha test is implemented (no visible effect: drawn glint fragments have alpha > 0).
+The exact qgl layer order was not traced (qgl scene graph, not in the renderer image).
+
+Layer drivers found in the renderer: 0x0202b6a8 (factor +0x140; boot states 11/12 set
+0 or 1 over 2 s; idle 0), 0x0202b6dc (factor +0x160 by output height: ≥1080 → 0,
+≥720 → 0.5, else 1; called from resize 0x0201acb4), 0x0202b618 (intensity +0x120, from
+scene method 0x0201b128 driven by the XMB), 0x0202b658 (colour +0xd0, from 0x0201afdc;
+boot passes (c,c,c,0)). Not yet wired: the resolution rule for +0x160.
+
 qgl_base (dev_flash/vsh/module/qglbase.sprx, decrypted with sce.application_elf;
 module info at file offset 0x67f2c, TOC 0x76820) answers several former guesses:
 - random 0x2e67e2d8 (0x5f578): shared bss counter, Perlin-style hash, [-1, 1]. Now exact

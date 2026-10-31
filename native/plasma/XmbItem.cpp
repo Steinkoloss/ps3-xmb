@@ -200,7 +200,7 @@ private:
     double hour_ = -1;
     unsigned monthShown_ = 0;
     double hourShown_ = 0;
-    bool failed_ = false, glints_ = false;
+    bool failed_ = false, glints_ = true;
 };
 }
 

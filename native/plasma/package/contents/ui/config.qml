@@ -35,7 +35,7 @@ Kirigami.FormLayout {
     QQC2.CheckBox {
         id: glints
         Kirigami.FormData.label: "Glints:"
-        text: "Draw the glint pass (experimental)"
+        text: "Draw the glint pass"
     }
     QQC2.SpinBox {
         id: hour

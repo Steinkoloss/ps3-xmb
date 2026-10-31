@@ -58,7 +58,8 @@ Renderer::Renderer(const QString& directory, QJsonObject graph, QString resource
         pass.name = name;
         pass.specification = specification;
         pass.program = std::make_unique<GlProgram>(static_cast<QOpenGLFunctions_4_3_Core&>(*this), directory, programs,
-            specification.value("vertex").toString(), specification.value("fragment").toString());
+            specification.value("vertex").toString(), specification.value("fragment").toString(),
+            specification.value("alphaTest").toString() == "greater0");
         const auto uniforms = specification.value("uniforms").toObject();
         for (auto i = uniforms.begin(); i != uniforms.end(); ++i) pass.program->set(i.key(), i.value().toArray());
         passes_.push_back(std::move(pass));

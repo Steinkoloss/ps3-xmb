@@ -95,16 +95,27 @@ void OriginalDisplay::build() {
     composite["vertex"] = "lines/lib/moyou/LinesController.vpo";
     QJsonArray passes{bg,sheet,composite};
     // ParticlesLayer draws additively into the lit scene before glare (0x02060660).
+    // The particle layer draws after the lines layer's glare and tone stage: it has its own
+    // glare program (particles_second), and drawn earlier its glints would bloom twice.
+    constexpr bool particlesLast = true;
     QString scene = "composition";
+    QJsonArray particlePasses;
     for (const auto* program : {"particles_quads","particles_second"}) {
         QJsonObject particles{{"name",QString(program)},{"geometry","particles"},
             {"vertex",QString("lines/lib/particles/%1.vpo").arg(program)},
             {"fragment",QString("lines/lib/particles/%1.fpo").arg(program)},
             {"over",scene},{"blend","add"},{"uniforms",QJsonObject{}},
             {"particleBit",QString(program) == "particles_quads" ? 1 : 2},
+            // 0x02060660: alpha test GREATER 0, additive ONE/ONE; 0x0205c254: no depth/cull/stencil.
+            {"alphaTest","greater0"},
             {"textures",QJsonObject{{"0",QJsonObject{{"file","lines/particles/proc_iridescent.tga"}}}}}};
-        passes.append(particles);
-        scene = program;
+        particlePasses.append(particles);
+    }
+    if (!particlesLast) {
+        for (auto value : particlePasses) {
+            auto particles = value.toObject(); particles["over"] = scene;
+            passes.append(particles); scene = particles["name"].toString();
+        }
     }
     auto glareSource = pass("glare-source-pre","GlareSourcePre",quadUniforms(),{{"0",QJsonObject{{"pass",scene}}}});
     glareSource["fragment"] = "lines/lib/glutils/GlareSourcePre.fpo";
@@ -151,7 +162,16 @@ void OriginalDisplay::build() {
     final["fragment"] = "lines/lib/glutils/ToneApplyDisplay.fpo";
     auto finalUniforms = final["uniforms"].toObject(); finalUniforms["_GlareWeight"] = QJsonArray{1};
     final["uniforms"] = finalUniforms; final["over"] = scene; final["blend"] = "add";
-    passes.append(final);
+    if (particlesLast) {
+        final["format"] = "rgba16f";
+        passes.append(final);
+        QString base = "display";
+        for (auto value : particlePasses) {
+            auto particles = value.toObject(); particles["over"] = base; particles["format"] = "rgba16f";
+            passes.append(particles); base = particles["name"].toString();
+        }
+    } else
+        passes.append(final);
     display_ = std::make_unique<Renderer>(shaders,graph(passes),reference_);
     const auto& textures = constants_.textures;
     display_->texture("stripes",QSize(textures[0].width,textures[0].height),textures[0].rgba.data());
