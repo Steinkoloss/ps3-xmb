@@ -55,16 +55,16 @@ native/check.sh
 
 ## Performance
 
-The SPU surface stages (FFD projection and the bicubic patches) run as native ports of
-the original kernels (`SurfaceEvaluator`), matching the translated SPU code to float
-rounding (tested; `MOYOU_VERIFY_NATIVE=1` compares every frame, `MOYOU_SURFACE=original`
-runs the translation). Measured per 60 Hz update on a Ryzen 7 5700X3D: rope 0.9 ms,
-surface 0.3 ms, particles 6 ms (translated PPU code, run beside the next update).
-- Hot VMX instructions in the translations use SSE versions (`tools/ppu_vmx_sse.h`,
-  staged by `lift_rope.py`), bit-identical to the ps3recomp scalar helpers; guest
-  memory accessors inline with their permission check.
-- Particles run beside the next rope/surface update; frames carry the previous
-  update's particles.
-- The FFD lattice is read back asynchronously; exposure tables are cached and only
-  the dither noise is regenerated (native port, checked by `--noise-check`).
-- Translated guest code builds for `x86-64-v3` (`MOYOU_GUEST_OPTIMIZATION`).
+The hot stages run as native ports of the original code, checked against the translations
+(`tests/test_native_stages.py`; `MOYOU_VERIFY_NATIVE=1` compares every update):
+- SPU surface stages (FFD projection, bicubic patches; `SurfaceEvaluator`): equal to float
+  rounding. `MOYOU_SURFACE=original` runs the translation.
+- PPU particle loop 0x0205d7b0 (`RopeSolver::particleUpdate`) and the math module's
+  sine/cosine: byte-identical particle state. `MOYOU_PARTICLES=original` runs the translation.
+
+Everything else is translated code: hot VMX instructions use SSE versions
+(`tools/ppu_vmx_sse.h`, staged by `lift_rope.py`, bit-identical to the ps3recomp scalar
+helpers), guest memory accessors inline with their permission check, and guest code builds
+for `x86-64-v3` (`MOYOU_GUEST_OPTIMIZATION`). Particles run beside the next rope/surface
+update; the FFD lattice is read back asynchronously; exposure tables are cached and only the
+dither noise is regenerated (native port, checked by `--noise-check`).

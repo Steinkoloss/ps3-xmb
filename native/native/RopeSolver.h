@@ -58,6 +58,7 @@ public:
     uint32_t guestWord(uint32_t address) const;  // development inspection
     std::vector<uint8_t> guestBytes(uint32_t address, uint32_t size) const;
 private:
+    void particleUpdate(uint32_t system);
     std::vector<uint8_t> exposureNoise();
     struct State;
     std::unique_ptr<State> state_;

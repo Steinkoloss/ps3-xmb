@@ -1,9 +1,11 @@
 #include "RopeSolver.h"
 #include "rope_program.h"
 #include "rope_digests.h"
+#include "CellEstimate.h"
 #include <openssl/sha.h>
 #include <sys/mman.h>
 #include <bit>
+#include <immintrin.h>
 #include <cmath>
 #include <cstring>
 #include <fstream>
@@ -657,8 +659,10 @@ unsigned RopeSolver::particleFrame(uint32_t system, uint32_t layer, const std::v
                                    unsigned width, unsigned height, const Matrix& columns, float aspect, float seconds) {
     if (grid.size() != size_t(width) * height) throw std::runtime_error("Invalid particle emission grid");
     if (!gridData) gridData = particleAllocate(grid.size() * 32, 0x80);
+    if (!allowed(gridData, grid.size() * 32, true)) throw std::runtime_error("Particle emission grid outside guest memory");
+    auto* words = reinterpret_cast<uint32_t*>(vm_base + gridData);
     for (size_t i = 0; i < grid.size(); ++i)
-        for (unsigned c = 0; c < 8; ++c) writeFloat(gridData + i * 32 + c * 4, grid[i][c]);
+        for (unsigned c = 0; c < 8; ++c) words[i * 8 + c] = __builtin_bswap32(std::bit_cast<uint32_t>(grid[i][c]));
     writeFloat(vm_read32(layer + 0xb0) + 0x14, aspect);
     // ParticlesLayer frame 0x02031f44: live parameters from the menu copy plus the
     // SPE deltas scaled by the layer's clamped factors (+0x140, +0x160).
@@ -687,8 +691,43 @@ unsigned RopeSolver::particleFrame(uint32_t system, uint32_t layer, const std::v
     // 0x02031f44 → 0x0205de2c(system, camera FOV): the field takes the camera's FOV
     // (0x02023ed8 reads camera+0x20; 0.925 on a running XMB), then the PPU update path runs.
     writeFloat(system + 0x1358, readFloat(vm_read32(layer + 0xb0) + 0x20));
-    cpu.gpr[3] = system;
-    moyou_rope_func_0205DDC8(&cpu); drain(&cpu);   // PPU update path
+    if (std::getenv("MOYOU_PARTICLES") && !std::strcmp(std::getenv("MOYOU_PARTICLES"), "original")) {
+        cpu.gpr[3] = system;
+        moyou_rope_func_0205DDC8(&cpu); drain(&cpu);   // PPU update path
+    } else if (std::getenv("MOYOU_VERIFY_NATIVE")) {
+        // Run the original on a copy of the particle arena, then the native path from the
+        // same state, and report the first difference.
+        std::vector<uint8_t> before(vm_base + particleBase, vm_base + particleEnd);
+        cpu.gpr[3] = system;
+        moyou_rope_func_0205DDC8(&cpu); drain(&cpu);
+        std::vector<uint8_t> original(vm_base + particleBase, vm_base + particleEnd);
+        std::memcpy(vm_base + particleBase, before.data(), before.size());
+        particleUpdate(system);
+        const auto* now = vm_base + particleBase;
+        size_t differences = 0, first = 0;
+        for (size_t i = 0; i < original.size(); ++i)
+            if (now[i] != original[i] && !(i >= system + 0x1740 - particleBase && i < system + 0x17b0 - particleBase))
+                { if (!differences++) first = i; }
+        static unsigned frame = 0;
+        ++frame;
+        if (differences) {
+            std::fprintf(stderr, "native particles frame %u: %zu bytes differ, first at %08zx\n",
+                frame, differences, first + particleBase);
+            const uint32_t array = vm_read32(vm_read32(system + 0xa4) + 0x10), vertices = vm_read32(system + 0x1700);
+            unsigned shown = 0;
+            for (size_t i = 0; i < original.size() && shown < 6; i += 4)
+                if (std::memcmp(now + i, original.data() + i, 4)) {
+                    const uint32_t address = uint32_t(i + particleBase);
+                    uint32_t a, b; std::memcpy(&a, original.data() + i, 4); std::memcpy(&b, now + i, 4);
+                    a = __builtin_bswap32(a); b = __builtin_bswap32(b);
+                    std::fprintf(stderr, "  %08x particle %d field %+d: original %08x %.9g native %08x %.9g\n", address,
+                        address >= array ? int((address - array) / 0x30) : -1, address >= array ? int((address - array) % 0x30) : int(address) - int(vertices),
+                        a, std::bit_cast<float>(a), b, std::bit_cast<float>(b));
+                    ++shown;
+                }
+        }
+        else if (frame % 600 == 0) std::fprintf(stderr, "native particles frame %u: identical\n", frame);
+    } else particleUpdate(system);
     return vm_read32(system + 0x16fc);
 }
 
@@ -897,4 +936,228 @@ RopeSolver::GlareWeights RopeSolver::glareWeights(Vector radii, float sumPower, 
     }
     for (auto& weight : result.levels) weight = static_cast<float>(double(weight) / sum) * level * level;
     return result;
+}
+
+// ---- Native particle update ---------------------------------------------------------
+// The PPU update 0x0205ddc8 with its per-particle loop 0x0205d7b0 written out natively;
+// the bookkeeping around the loop stays translated. Same arithmetic in the same order:
+// VMX lanes are IEEE single (vmaddfp with a -0 addend is a product; fused otherwise),
+// VSCR[NJ] is the host's DAZ/FTZ, vrsqrtefp is Cell's estimate (CellEstimate.h) and vrefp
+// exact, as in the translation; sine/cosine is a port of the math module's (firmwareSinCos).
+// MOYOU_PARTICLES=original runs the translated loop; MOYOU_VERIFY_NATIVE=1 runs both and
+// compares the particle arena byte for byte.
+extern void moyou_rope_func_0205CA80(ppu_context*);
+extern void moyou_rope_func_0205CAD0(ppu_context*);
+extern void moyou_rope_func_0205CA00(ppu_context*);
+extern void moyou_rope_func_0205C934(ppu_context*);
+extern void moyou_rope_func_0205C988(ppu_context*);
+extern void moyou_rope_func_0205C9C8(ppu_context*);
+extern void moyou_rope_func_0205C8D4(ppu_context*);
+extern void moyou_rope_func_02087B50(ppu_context*);
+
+namespace {
+struct Lanes { float v[4]; float& operator[](int i) { return v[i]; } float operator[](int i) const { return v[i]; } };
+Lanes loadLanes(uint32_t address) { Lanes l; for (int i = 0; i < 4; ++i) l[i] = readFloat(address + i * 4); return l; }
+void storeLanes(uint32_t address, const Lanes& l) { for (int i = 0; i < 4; ++i) writeFloat(address + i * 4, l[i]); }
+Lanes operator+(const Lanes& a, const Lanes& b) { Lanes r; for (int i = 0; i < 4; ++i) r[i] = a[i] + b[i]; return r; }
+Lanes operator-(const Lanes& a, const Lanes& b) { Lanes r; for (int i = 0; i < 4; ++i) r[i] = a[i] - b[i]; return r; }
+Lanes operator*(const Lanes& a, const Lanes& b) { Lanes r; for (int i = 0; i < 4; ++i) r[i] = a[i] * b[i]; return r; }
+Lanes operator*(const Lanes& a, float s) { Lanes r; for (int i = 0; i < 4; ++i) r[i] = a[i] * s; return r; }
+Lanes withW(Lanes a, float w) { a[3] = w; return a; }
+// 0x0202b4f4: columns at m; y*c1, then x*c0, z*c2, w*c3 fused in that order.
+Lanes transform(uint32_t m, const Lanes& v) {
+    const auto c0 = loadLanes(m), c1 = loadLanes(m + 0x10), c2 = loadLanes(m + 0x20), c3 = loadLanes(m + 0x30);
+    Lanes r;
+    for (int i = 0; i < 4; ++i) {
+        float t = v[1] * c1[i];
+        t = std::fma(v[0], c0[i], t);
+        t = std::fma(v[2], c2[i], t);
+        r[i] = std::fma(v[3], c3[i], t);
+    }
+    return r;
+}
+// 0x020586f8: Park-Miller step, mantissa into [2,4), minus 3.
+float lcg(uint32_t& state) {
+    state *= 16807u;
+    return std::bit_cast<float>(((state >> 9) & 0x7fffffu) | 0x40000000u) - 3.0f;
+}
+// 0x0205cf30: bilinear flow-map texel (signed bytes / 127) around the scaled position.
+Lanes flow(uint32_t S, Lanes position) {
+    const uint32_t T = S + 0x780;
+    vm_write32(T, S + 0x80);                                  // 0x0205d0f0: map base
+    const auto scale = loadLanes(T + 0x10);
+    for (int i = 0; i < 4; ++i) position[i] = (scale[i] * position[i]) - 0.5f;
+    Lanes cell, fraction;
+    for (int i = 0; i < 4; ++i) { cell[i] = std::floor(position[i]); fraction[i] = position[i] - cell[i]; }
+    const int x = int(cell[0]), y = int(cell[1]);
+    const auto field = [&](uint32_t o) { return int32_t(vm_read32(T + o)); };
+    const auto texel = [&](int tx, int ty) {
+        tx = std::max(std::min(tx, field(0x48)), field(0x20));
+        ty = std::max(std::min(ty, field(0x4c)), field(0x24));
+        const uint32_t at = uint32_t((ty * field(4) + tx) * 3) + vm_read32(T);
+        Lanes t;
+        for (int i = 0; i < 3; ++i) t[i] = float(int8_t(vm_read8(at + i))) * 0.007874015718698502f;
+        t[3] = 0.0f * 0.007874015718698502f;
+        return t;
+    };
+    const auto s0 = texel(x, y), s1 = texel(x + field(0x28), y + field(0x2c));
+    const auto s2 = texel(x + field(0x30), y + field(0x34)), s3 = texel(x + field(0x38), y + field(0x3c));
+    const auto a = s0 + (s1 - s0) * fraction[0];
+    const auto b = s2 + (s3 - s2) * fraction[0];
+    return a + (b - a) * fraction[1];
+}
+// 0x0203ff4c: a ⊗ b (vectormath), terms added in the original order.
+Lanes quatMultiply(const Lanes& a, const Lanes& b) {
+    Lanes r = b * a[3];
+    const Lanes px{{b[3], b[2], b[1], b[0]}}, py{{b[2], b[3], b[0], b[1]}}, pz{{b[1], b[0], b[3], b[2]}};
+    const float sx[] = {1, -1, 1, -1}, sy[] = {1, 1, -1, -1}, sz[] = {-1, 1, 1, -1};
+    for (int i = 0; i < 4; ++i) r[i] = std::fma(px[i] * a[0], sx[i], r[i]);
+    for (int i = 0; i < 4; ++i) r[i] = std::fma(py[i] * a[1], sy[i], r[i]);
+    for (int i = 0; i < 4; ++i) r[i] = std::fma(pz[i] * a[2], sz[i], r[i]);
+    return r;
+}
+// 0x02045aa8: q * rsqrt(dot) with one Newton step on the (exact) estimate.
+Lanes quatNormalize(const Lanes& q) {
+    Lanes s;
+    for (int i = 0; i < 4; ++i) s[i] = std::fma(q[i], q[i], 0.0f);
+    const float dot = (s[0] + s[1]) + (s[2] + s[3]);
+    const float estimate = std::bit_cast<float>(cellRsqrtEstimate(std::bit_cast<uint32_t>(dot), true));  // vrsqrtefp
+    const float refined = std::fma(-(std::fma(estimate, estimate * dot, -1.0f)), estimate * 0.5f, estimate);
+    return q * (refined == refined ? refined : estimate);
+}
+// 0x0205d674: truncating float -> half, flushed below 2^-14 and to infinity above 2^15.
+uint16_t half(float value) {
+    const uint32_t x = std::bit_cast<uint32_t>(value), e = (x >> 23) & 0xff;
+    uint32_t h = int32_t(e) > 0x70 ? (((e - 0x70) << 10) & ~0x3ffu) | ((x >> 13) & 0x3ff) : 0;
+    if (int32_t(e) > 0x8e) h = 0x7c00;
+    return uint16_t((h & 0x7fff) | ((x >> 16) & 0x8000));
+}
+// Math module 0x95f60 (sine for which = 0, cosine for 1): quadrant n from x * 2/pi,
+// two-part reduction, single-precision fused polynomials. NaN for the inputs it routes
+// elsewhere (zero classes, non-finite, |x| > 40.7), which the caller sends to the original.
+float firmwareSinCos(float x, int which) {
+    if (std::fpclassify(x) != FP_NORMAL || double(x) < -40.7 || double(x) > 40.7)
+        return std::numeric_limits<float>::quiet_NaN();
+    const float scaled = x * 0.6366197467f;
+    const int n = int(scaled > 0.0f ? scaled + 0.5f : scaled - 0.5f);
+    const unsigned quadrant = unsigned((n & 3) + which);
+    const float k = float(double(n));
+    float r = std::fma(k, -1.570796251f, x);
+    r = std::fma(k, -7.549790126e-08f, r);
+    const float epsilon = 0.000244140625f;
+    if (-epsilon >= r || r >= epsilon) {
+        const float r2 = r * r;
+        if (quadrant & 1) {
+            float p = std::fma(r2, -0.001360224909f, 0.04165669531f);
+            p = std::fma(r2, p, -0.4999990165f);
+            r = std::fma(r2, p, 1.0f);
+        } else {
+            const float r3 = r * r2;
+            float p = std::fma(r2, -0.0001950727019f, 0.008332075551f);
+            p = std::fma(r2, p, -0.1666665226f);
+            r = std::fma(r3, p, r);
+        }
+    } else if (quadrant & 1) r = 1.0f;
+    return quadrant & 2 ? -r : r;
+}
+float vmaxf(float x, float y) {
+    if (x != x || y != y) return x + y;
+    if (x == 0 && y == 0) return std::signbit(x) ? y : x;
+    return x > y ? x : y;
+}
+float vminf(float x, float y) {
+    if (x != x || y != y) return x + y;
+    if (x == 0 && y == 0) return std::signbit(x) ? x : y;
+    return x < y ? x : y;
+}
+}
+
+void RopeSolver::particleUpdate(uint32_t system) {
+    auto& cpu = state_->particleCpu;
+    const auto call = [&](void (*function)(ppu_context*), uint32_t r3) { cpu.gpr[3] = r3; function(&cpu); drain(&cpu); };
+    // 0x0205ddc8 around its loop.
+    vm_write32(system + 0xa4, system + 0x60);
+    vm_write32(system + 0xa0, system + 0x60);
+    call(moyou_rope_func_0205CA80, system);
+    call(moyou_rope_func_0205CAD0, system);
+    call(moyou_rope_func_0205CA00, system);
+    // 0x0205d7b0
+    call(moyou_rope_func_0205C9C8, system + 0x1740);
+    vm_write32(system + 0x1888, 0);
+    const uint32_t S = system + 0x100;
+    const float invStep = 1.0f * (1.0f / readFloat(S + 0x8b0));
+    const Lanes inverse{{1.0f * (1.0f / readFloat(S + 0x8b0)), 1.0f * (1.0f / readFloat(S + 0x8b4)),
+                         1.0f * (1.0f / readFloat(S + 0x8b8)), 1.0f * (1.0f / readFloat(S + 0x8bc))}};
+    (void)invStep;
+    uint32_t seeds[3] = {0x98756161u, 0x21324889u, 0x82181158u};
+    const auto sincos = [&](float x, int which) {
+        const float native = firmwareSinCos(x, which);
+        if (native == native) return native;
+        cpu.fpr[1] = x; cpu.gpr[4] = uint64_t(which);       // unusual inputs: translated original
+        moyou_rope_func_02087B50(&cpu); drain(&cpu);
+        return float(cpu.fpr[1]);
+    };
+    const uint32_t array = vm_read32(vm_read32(system + 0xa4) + 0x10), count = vm_read32(vm_read32(system + 0xa4) + 0x14);
+    const auto S0 = withW(loadLanes(S), 0.0f), S10 = loadLanes(S + 0x10), S890 = loadLanes(S + 0x890);
+    const auto step = loadLanes(S + 0x8b0), pivot = withW(loadLanes(S + 0x830), 1.0f);
+    const float brownian = readFloat(S + 0x8a4), flowScale = readFloat(S + 0x8a0), spin = readFloat(S + 0x8ac) * 0.01666666753590107f;
+    const auto lower = loadLanes(S + 0x800), upper = loadLanes(S + 0x810);
+    const unsigned mxcsr = _mm_getcsr();
+    _mm_setcsr(mxcsr | 0x8040);   // DAZ | FTZ: VSCR[NJ]
+    for (uint32_t i = 0; i < count; ++i) {
+        const uint32_t p = array + i * 0x30, velocity = p + 0x10, rotation = p + 0x20;
+        if (readFloat(p + 12) == -666.0f) continue;
+        const auto flowField = transform(S + 0x700, withW(flow(S, transform(S + 0x740, withW(loadLanes(p), 1.0f))), 0.0f));
+        Lanes random;
+        random[0] = lcg(seeds[0]); random[1] = lcg(seeds[1]); random[2] = lcg(seeds[2]); random[3] = 0;
+        const auto acceleration = withW(((random * brownian) + S890) + flowField * flowScale, 0.0f);
+        const auto force = S0 + acceleration;
+        const auto position = withW(loadLanes(p), 1.0f);
+        const auto swirl = (pivot + transform(S + 0x840, position - pivot)) - position;
+        auto v = (swirl * inverse) + loadLanes(velocity);
+        storeLanes(velocity, v);
+        v = ((force - S10 * v) * step) + v;
+        storeLanes(velocity, v);
+        const auto moved = (v * step) + loadLanes(p);
+        storeLanes(p, moved);
+        const float age = moved[3], phase = age * 6.2831854820251465f;
+        const Lanes omega{{sincos(phase * 0.3700000047683716f, 0), sincos(phase * 0.17000000178813934f, 1),
+                           sincos(phase * 0.3100000023841858f, 1), 0.0f}};
+        const auto q = loadLanes(rotation) + (quatMultiply(omega, loadLanes(rotation)) * 0.5f) * spin;
+        storeLanes(rotation, q);
+        storeLanes(rotation, quatNormalize(q));
+        bool inside = 0.9999899864196777f > age;
+        if (inside) {
+            Lanes clamped;
+            for (int k = 0; k < 4; ++k) clamped[k] = vminf(vmaxf(moved[k], lower[k]), upper[k]);
+            inside = clamped[0] == moved[0] && clamped[1] == moved[1] && clamped[2] == moved[2];
+        }
+        if (!inside) {
+            // 0x0205bb54: free-list push (sys+0x1310), then mark dead.
+            if (readFloat(p + 12) != -666.0f) {
+                const uint32_t list = vm_read32(system + 0x1310), used = vm_read32(system + 0x1314);
+                vm_write32(list + used * 4, i);
+                vm_write32(system + 0x1314, used + 1);
+                writeFloat(p + 12, -666.0f);
+            }
+            continue;
+        }
+        vm_write32(system + 0x1888, vm_read32(system + 0x1888) + 1);
+        const uint32_t out = vm_read32(system + 0x1700);
+        const float early = age < 0.019999999552965164f ? age : 0.019999999552965164f;
+        float late = age - 0.9399999976158142f;
+        if (!(late >= 0.0f)) late = 0.0f;
+        const float grow = early * 50.0f;
+        storeLanes(out, withW(moved, std::fma(late * -16.66666603088379f, grow, grow)));
+        const auto r = loadLanes(rotation);
+        for (int k = 0; k < 4; ++k) vm_write16(out + 0x10 + k * 2, half(r[k]));
+        for (int k = 0; k < 4; ++k) vm_write16(out + 0x18 + k * 2, half(0.0f));
+        vm_write32(system + 0x1700, out + 0x20);
+        vm_write32(system + 0x16f8, vm_read32(system + 0x16f8) + 1);
+    }
+    _mm_setcsr(mxcsr);
+    vm_write32(system + 0x1880, vm_read32(system + 0x16f8));
+    call(moyou_rope_func_0205C8D4, system + 0x1740);
+    call(moyou_rope_func_0205C934, system);
+    call(moyou_rope_func_0205C988, system);
 }
