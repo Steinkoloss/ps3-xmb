@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kcfg xmlns="http://www.kde.org/standards/kcfg/1.0"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="http://www.kde.org/standards/kcfg/1.0
+      http://www.kde.org/standards/kcfg/1.0/kcfg.xsd" >
+  <kcfgfile name=""/>
+  <group name="General">
+    <entry name="Preset" type="String">
+      <label>Original override set: empty, day, night, yoake or higure</label>
+      <default></default>
+    </entry>
+    <entry name="Month" type="Int">
+      <label>Month colour 1-12, or 0 to follow the calendar</label>
+      <default>0</default>
+    </entry>
+    <entry name="Hour" type="Int">
+      <label>Fixed hour 0-23, or -1 to follow the clock</label>
+      <default>-1</default>
+    </entry>
+  </group>
+</kcfg>

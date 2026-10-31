@@ -3,10 +3,17 @@ project(MoyouNative LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 find_package(Qt6 6.9 REQUIRED COMPONENTS Gui OpenGL)
-qt_standard_project_setup()
-qt_add_executable(moyou-preview native/main.cpp native/GlProgram.cpp native/Renderer.cpp)
-target_link_libraries(moyou-preview PRIVATE Qt6::Gui Qt6::OpenGL)
-target_compile_options(moyou-preview PRIVATE -Wall -Wextra -Wpedantic -ffp-contract=off -fno-fast-math)
+qt_standard_project_setup(REQUIRES 6.9)
+# Everything also links into the Qt Quick plugin.
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+set(MOYOU_WARNINGS -Wall -Wextra -Wpedantic -ffp-contract=off -fno-fast-math)
+add_library(moyou-render STATIC native/GlProgram.cpp native/Renderer.cpp)
+target_include_directories(moyou-render PUBLIC native)
+target_link_libraries(moyou-render PUBLIC Qt6::Gui Qt6::OpenGL)
+target_compile_options(moyou-render PRIVATE ${MOYOU_WARNINGS})
+qt_add_executable(moyou-preview native/main.cpp)
+target_link_libraries(moyou-preview PRIVATE moyou-render)
+target_compile_options(moyou-preview PRIVATE ${MOYOU_WARNINGS})
 
 # Guest translations keep strict IEEE flags at every level; -O0 is the reference build.
 # x86-64-v2 enables ps3recomp's SSE4.1 shuffles without FMA/AVX code generation.
@@ -51,7 +58,19 @@ if(MOYOU_SPU_DIRECTORY)
 endif()
 
 if(MOYOU_CPU_DIRECTORY AND MOYOU_SPU_DIRECTORY)
-    target_sources(moyou-preview PRIVATE native/OriginalScene.cpp)
-    target_link_libraries(moyou-preview PRIVATE moyou-rope moyou-surface)
+    add_library(moyou-scene STATIC native/OriginalScene.cpp native/OriginalSimulation.cpp)
+    target_link_libraries(moyou-scene PUBLIC moyou-render moyou-rope moyou-surface)
+    target_compile_options(moyou-scene PRIVATE ${MOYOU_WARNINGS})
+    target_link_libraries(moyou-preview PRIVATE moyou-scene)
     target_compile_definitions(moyou-preview PRIVATE MOYOU_HAVE_LIVE_SCENE)
+
+    # QML module PS3Xmb (XmbBackground) for the Plasma wallpaper; see plasma/install.sh.
+    find_package(Qt6 6.9 COMPONENTS Quick)
+    if(Qt6Quick_FOUND)
+        qt_add_qml_module(moyou-qml URI PS3Xmb VERSION 1.0 PLUGIN_TARGET moyou-qml
+            OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/qml/PS3Xmb SOURCES plasma/XmbItem.cpp plasma/XmbItem.h)
+        target_include_directories(moyou-qml PRIVATE plasma)
+        target_link_libraries(moyou-qml PRIVATE Qt6::Quick moyou-scene)
+        target_compile_options(moyou-qml PRIVATE ${MOYOU_WARNINGS})
+    endif()
 endif()

@@ -197,6 +197,15 @@ void Renderer::drawMesh() {
 }
 
 void Renderer::render(GLuint destination, QSize size) {
+    // A host scene graph may share this context; establish the state the passes assume.
+    while (glGetError() != GL_NO_ERROR) {}
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_FRAMEBUFFER_SRGB);
+    glDisable(GL_DITHER);
+    glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);
     glBindVertexArray(vertexArray_);
     std::map<QString, Target*> previous;
     for (size_t index = 0; index < passes_.size(); ++index) {

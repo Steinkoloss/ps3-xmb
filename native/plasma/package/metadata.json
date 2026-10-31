@@ -1,0 +1,11 @@
+{
+    "KPackageStructure": "Plasma/Wallpaper",
+    "KPlugin": {
+        "Description": "PlayStation 3 XMB waves running the original firmware programs",
+        "Id": "org.ps3xmb.waves",
+        "License": "MIT",
+        "Name": "PS3 XMB Waves",
+        "Version": "0.1"
+    },
+    "X-Plasma-API-Minimum-Version": "6.0"
+}

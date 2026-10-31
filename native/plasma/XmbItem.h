@@ -1,0 +1,58 @@
+#pragma once
+#include <QQuickFramebufferObject>
+#include <QtQml/qqmlregistration.h>
+#include <memory>
+
+class XmbSimulator;
+struct XmbChannel;
+
+// Live original background for Qt Quick. The CPU/SPU simulation runs on its own
+// thread and context; the original pass graph renders on the scene-graph thread.
+class XmbItem : public QQuickFramebufferObject {
+    Q_OBJECT
+    QML_NAMED_ELEMENT(XmbBackground)
+    // Directory with shaders/, reference/, cpu/ and spline/original-ls.bin.
+    Q_PROPERTY(QString dataDirectory READ dataDirectory WRITE setDataDirectory NOTIFY sourceChanged)
+    // Original override set: "", "day", "night", "yoake" or "higure".
+    Q_PROPERTY(QString preset READ preset WRITE setPreset NOTIFY sourceChanged)
+    // 1-12, or 0 to follow the system calendar.
+    Q_PROPERTY(int month READ month WRITE setMonth NOTIFY timeChanged)
+    // 0-24, or negative to follow the system clock.
+    Q_PROPERTY(double hour READ hour WRITE setHour NOTIFY timeChanged)
+    Q_PROPERTY(bool running READ running WRITE setRunning NOTIFY runningChanged)
+    Q_PROPERTY(QString error READ error NOTIFY errorChanged)
+public:
+    explicit XmbItem(QQuickItem* parent = nullptr);
+    ~XmbItem() override;
+    Renderer* createRenderer() const override;
+
+    QString dataDirectory() const { return dataDirectory_; }
+    void setDataDirectory(const QString& directory);
+    QString preset() const { return preset_; }
+    void setPreset(const QString& preset);
+    int month() const { return month_; }
+    void setMonth(int month);
+    double hour() const { return hour_; }
+    void setHour(double hour);
+    bool running() const { return running_; }
+    void setRunning(bool running);
+    QString error() const { return error_; }
+
+    std::shared_ptr<XmbChannel> channel() const;
+    Q_INVOKABLE void fail(const QString& message);
+signals:
+    void sourceChanged();
+    void timeChanged();
+    void runningChanged();
+    void errorChanged();
+protected:
+    void componentComplete() override;
+    void geometryChange(const QRectF& next, const QRectF& previous) override;
+private:
+    void restart();
+    QString dataDirectory_, preset_, error_;
+    int month_ = 0;
+    double hour_ = -1;
+    bool running_ = true;
+    std::unique_ptr<XmbSimulator> simulator_;
+};
