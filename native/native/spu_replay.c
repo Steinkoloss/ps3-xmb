@@ -3,6 +3,7 @@
  * fail here so an incomplete execution cannot become an accuracy checkpoint. */
 #include "spu/spu_context.h"
 #include "program_digests.h"
+#include "SpuRuntime.h"
 #include <inttypes.h>
 #include <openssl/sha.h>
 #include <setjmp.h>
@@ -107,6 +108,73 @@ uint32_t spu_rchcnt(spu_context* ctx, uint32_t channel) {
     return 0;
 }
 
+int moyou_spu_open(unsigned program, const char* path) {
+    failure = NULL;
+    if (program > 1 || !read_file(path, original, sizeof original)) {
+        failure = "Cannot read original SPU image"; return 0;
+    }
+    uint8_t digest[SHA256_DIGEST_LENGTH];
+    if (!SHA256(original, sizeof original, digest) || memcmp(digest, program_digests[program], sizeof digest)) {
+        failure = "Original SPU image failed its integrity check"; return 0;
+    }
+    memset(functions, 0, sizeof functions);
+    spu_context_init(&context, 0);
+    memcpy(context.ls, original, sizeof original);
+    for (unsigned lane = 0; lane < 4; ++lane) context.gpr[1]._u32[lane] = 0x3f000;
+    if (program == 0) moyou_spline_spu_recomp_register();
+    else moyou_particles_spu_recomp_register();
+    g_spu_trampoline_fn = NULL;
+    return 1;
+}
+
+int moyou_spu_call(uint32_t entry, uint64_t limit) {
+    if (entry >= SPU_LS_SIZE || entry % 4 || entry == 0x2ff0 || limit == 0 || limit > 100000000) {
+        failure = "Invalid original SPU subroutine call"; return 0;
+    }
+    failure = NULL;
+    instructions = 0;
+    budget = limit;
+    stop_address = 0x2ff0;
+    stop_code = 0;
+    context.status = SPU_STATUS_RUNNING;
+    context.pc = entry;
+    context.host_depth = 0;
+    for (unsigned lane = 0; lane < 4; ++lane) context.gpr[0]._u32[lane] = stop_address;
+    g_spu_trampoline_fn = NULL;
+    if (setjmp(escape)) return 0;
+    spu_indirect_branch(&context);
+    spu_drain_call(&context, stop_address);
+    return 1;
+}
+
+int moyou_spu_write(uint32_t address, const void* bytes, size_t size) {
+    if (address > SPU_LS_SIZE || size > SPU_LS_SIZE - address) {
+        failure = "Original SPU write exceeds local store"; return 0;
+    }
+    memcpy(context.ls + address, bytes, size);
+    return 1;
+}
+int moyou_spu_read(uint32_t address, void* bytes, size_t size) {
+    if (address > SPU_LS_SIZE || size > SPU_LS_SIZE - address) {
+        failure = "Original SPU read exceeds local store"; return 0;
+    }
+    memcpy(bytes, context.ls + address, size);
+    return 1;
+}
+int moyou_spu_set_register(unsigned reg, const uint32_t words[4]) {
+    if (reg >= 128) { failure = "Invalid original SPU register"; return 0; }
+    for (unsigned lane = 0; lane < 4; ++lane) context.gpr[reg]._u32[lane] = words[lane];
+    return 1;
+}
+int moyou_spu_get_register(unsigned reg, uint32_t words[4]) {
+    if (reg >= 128) { failure = "Invalid original SPU register"; return 0; }
+    for (unsigned lane = 0; lane < 4; ++lane) words[lane] = context.gpr[reg]._u32[lane];
+    return 1;
+}
+const char* moyou_spu_error(void) { return failure ? failure : "Unknown SPU execution failure"; }
+uint64_t moyou_spu_instructions(void) { return instructions; }
+
+#ifndef MOYOU_SPU_LIBRARY
 int main(int argc, char** argv) {
     if (argc != 5 || (strcmp(argv[1], "spline") && strcmp(argv[1], "particles"))) {
         fputs("Usage: moyou-spu-replay spline|particles original-ls.bin input.snapshot output.snapshot\n"
@@ -169,3 +237,4 @@ int main(int argc, char** argv) {
     printf("Returned at %05X after %" PRIu64 " original instructions\n", context.pc, instructions);
     return 0;
 }
+#endif
