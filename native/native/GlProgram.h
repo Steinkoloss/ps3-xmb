@@ -18,7 +18,7 @@ public:
     GlProgram& operator=(const GlProgram&) = delete;
     void set(const QString& name, const QJsonArray& values);
     void bind();
-    void orientTexture(GLuint unit, bool flip, QSize size);
+    void orientTexture(GLuint unit, bool flip, QSize size, bool repeat);
     const std::map<GLuint, GLenum>& samplers() const { return samplers_; }
 private:
     void initializeConstants(const QJsonObject& metadata, bool vertex);

@@ -30,6 +30,7 @@ private:
     void drawMesh();
     std::vector<Pass> passes_;
     std::map<QString, GLuint> images_;
+    std::map<GLuint,QSize> imageSizes_;
     std::map<QString, Target> suppliedTextures_;
     std::vector<GLuint> ownedTextures_;
     GLuint vertexArray_=0, vertices_=0, indices_=0, meshVertices_=0, meshIndices_=0;

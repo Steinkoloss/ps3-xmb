@@ -107,10 +107,10 @@ def prepare(args):
             renderer_bounds[0x02024228] = 0x020243c4
         manifest["rope_functions"] = lift(renderer, 0x02000000, renderer_bounds,
             imports | {0x0204c4e4: 0xffff0002, 0x0204b8e8: 0xffff0003, 0x0204b49c: 0xffff0004},
-            [0x0204bed0,0x0204f814,0x02029cc8,0x0203f290,0x0204bad0,0x0204b928,0x02071794], 0x020a7d70,
+            [0x0204bed0,0x0204f814,0x02029cc8,0x0203f290,0x0204bad0,0x0204b928,0x02071794,0x02071384], 0x020a7d70,
             0x0208bc70, "moyou_rope_", stage)
         manifest["math_functions"] = lift(math, 0, ranges(args.math_bounds),
-            {0x00095b44: 0xffff0001}, [0x00095f60,0x00093f94,0x00093b38],
+            {0x00095b44: 0xffff0001}, [0x00095f60,0x00093f94,0x00093b38,0x00092d34,0x00092e90],
             0x006f5558, 0x00635c08, "moyou_math_", stage)
         # Native integration includes one shared context declaration per TU.
         shutil.copyfile(stage / "moyou_rope_program.h", stage / "rope_program.h")

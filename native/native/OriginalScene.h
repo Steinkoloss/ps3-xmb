@@ -7,10 +7,11 @@
 class OriginalScene {
 public:
     OriginalScene(const QString& shaders, const QString& reference, const QString& cpu,
-                  const QString& spline, const QString& preset);
+                  const QString& spline, const QString& preset, unsigned month = 7, double hour = -1);
     void advance(double seconds, QSize size);
     void render(GLuint target, QSize size);
     QImage capture(QSize size);
+    const std::vector<float>& mesh() const { return vertices_; }
 private:
     std::map<QString,float> menu(const QString& name) const;
     void deformation(float time);
@@ -22,4 +23,5 @@ private:
     SurfaceEvaluator::Vector scale1_{}, scale2_{}, offset_{};
     QString reference_, preset_;
     std::map<QString,float> hdr_;
+    std::vector<float> vertices_;
 };

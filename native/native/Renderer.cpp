@@ -109,10 +109,12 @@ GLuint Renderer::imageTexture(const QString& path, GLenum wrap, GLenum type) {
     glTexImage2D(type, 0, GL_RGBA8, image.width(), image.height(), 0, GL_RGBA, GL_UNSIGNED_BYTE, image.constBits());
     glTexParameteri(type, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(type, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(type, GL_TEXTURE_WRAP_S, static_cast<GLint>(wrap));
-    glTexParameteri(type, GL_TEXTURE_WRAP_T, static_cast<GLint>(wrap));
+    const auto addressing = type == GL_TEXTURE_RECTANGLE ? GL_CLAMP_TO_EDGE : wrap;
+    glTexParameteri(type, GL_TEXTURE_WRAP_S, static_cast<GLint>(addressing));
+    glTexParameteri(type, GL_TEXTURE_WRAP_T, static_cast<GLint>(addressing));
     ownedTextures_.push_back(texture);
     images_.emplace(key, texture);
+    imageSizes_.emplace(texture,image.size());
     return texture;
 }
 
@@ -203,17 +205,31 @@ void Renderer::render(GLuint destination, QSize size) {
         QSize dimensions(spec.value("width").toInt(size.width()), spec.value("height").toInt(size.height()));
         if (dimensions.width() < 1 || dimensions.height() < 1) error("Invalid original render-target size");
         bool final = index + 1 == passes_.size();
+        const bool signedBlend = final && spec.value("blend").toString() == "add";
         if (final && dimensions != size) error("Final original pass size differs from its output surface");
-        if (!final && pass.target.size != dimensions) {
+        if ((!final || signedBlend) && pass.target.size != dimensions) {
             destroyTarget(pass.target);
-            pass.target = createTarget(dimensions, pixelFormat(spec.value("format").toString("rgba8")),
+            pass.target = createTarget(dimensions, pixelFormat(spec.value("format").toString(signedBlend ? "rgba16f" : "rgba8")),
                 spec.value("rectangle").toBool() ? GL_TEXTURE_RECTANGLE : GL_TEXTURE_2D);
         }
-        glBindFramebuffer(GL_FRAMEBUFFER, final ? destination : pass.target.framebuffer);
+        const auto framebuffer = final && !signedBlend ? destination : pass.target.framebuffer;
+        glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
         glViewport(0, 0, dimensions.width(), dimensions.height());
         glDisable(GL_BLEND);
         glClearColor(0,0,0,0);
         glClear(GL_COLOR_BUFFER_BIT);
+        if (spec.contains("over")) {
+            auto base = previous.find(spec.value("over").toString());
+            if (base == previous.end()) error("Original blend pass has no base framebuffer");
+            glBindFramebuffer(GL_READ_FRAMEBUFFER,base->second->framebuffer);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER,framebuffer);
+            glBlitFramebuffer(0,0,base->second->size.width(),base->second->size.height(),
+                0,0,dimensions.width(),dimensions.height(),GL_COLOR_BUFFER_BIT,GL_NEAREST);
+            glBindFramebuffer(GL_FRAMEBUFFER,framebuffer);
+        }
+        if (spec.value("blend").toString() == "add") {
+            glEnable(GL_BLEND); glBlendEquation(GL_FUNC_ADD); glBlendFunc(GL_ONE,GL_ONE);
+        } else if (spec.contains("blend")) error("Unadapted original blend mode");
         pass.program->bind();
         const auto bindings = spec.value("textures").toObject();
         for (const auto& [unit, type] : pass.program->samplers()) {
@@ -246,15 +262,32 @@ void Renderer::render(GLuint destination, QSize size) {
             } else {
                 texture = imageTexture(QDir(root_).filePath(binding.value("file").toString()),
                     binding.value("repeat").toBool() ? GL_REPEAT : GL_CLAMP_TO_EDGE, type);
+                sourceSize = imageSizes_.at(texture);
             }
-            pass.program->orientTexture(unit, binding.value("flipY").toBool(flip), sourceSize);
+            pass.program->orientTexture(unit, binding.value("flipY").toBool(flip), sourceSize,binding.value("repeat").toBool());
             glBindTexture(type, texture);
+            if (type == GL_TEXTURE_2D) {
+                glTexParameterf(type,GL_TEXTURE_MIN_LOD,binding.value("level").toInt());
+                glTexParameterf(type,GL_TEXTURE_MAX_LOD,binding.contains("level") ? binding.value("level").toInt() : 1000);
+            }
         }
         if (spec.value("geometry").toString() == "sheet") drawMesh();
         else drawFullscreen();
+        if (spec.value("mipmaps").toBool()) {
+            if (final || pass.target.type != GL_TEXTURE_2D) error("Original mipmap source needs an intermediate 2D target");
+            glBindTexture(GL_TEXTURE_2D,pass.target.texture);
+            glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR_MIPMAP_NEAREST);
+            glGenerateMipmap(GL_TEXTURE_2D);
+        }
         if (auto status = glGetError(); status != GL_NO_ERROR)
             error("Original pass " + pass.name + " failed, OpenGL error " + QString::number(status, 16));
         previous[pass.name] = &pass.target;
+        if (signedBlend) {
+            // Preserve negative dither cancellation until the final display clamp.
+            glBindFramebuffer(GL_READ_FRAMEBUFFER,pass.target.framebuffer);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER,destination);
+            glBlitFramebuffer(0,0,size.width(),size.height(),0,0,size.width(),size.height(),GL_COLOR_BUFFER_BIT,GL_NEAREST);
+        }
     }
 }
 

@@ -10,9 +10,12 @@
 #include <QSurfaceFormat>
 #include <QTimer>
 #include <QElapsedTimer>
+#include <QFile>
+#include <QtEndian>
+#include <bit>
 #include <cstdio>
 
-struct ScenePaths { QString reference, cpu, spline, preset; };
+struct ScenePaths { QString reference, cpu, spline, preset; unsigned month; double hour; };
 
 class Preview final : public QOpenGLWindow {
 public:
@@ -32,7 +35,7 @@ private:
         try {
 #ifdef MOYOU_HAVE_LIVE_SCENE
             if (!paths_.reference.isEmpty()) {
-                original_ = std::make_unique<OriginalScene>(shaders_,paths_.reference,paths_.cpu,paths_.spline,paths_.preset);
+                original_ = std::make_unique<OriginalScene>(shaders_,paths_.reference,paths_.cpu,paths_.spline,paths_.preset,paths_.month,paths_.hour);
                 clock_.start();
                 return;
             }
@@ -84,11 +87,15 @@ int main(int argc, char** argv) {
                        {"cpu", "Private original CPU translation directory", "directory"},
                        {"spline", "Verified original spline local store", "file"},
                        {"preset", "Original time-of-day preset", "name", "night"},
+                       {"month", "Original month colour, 1 through 12", "number", "7"},
+                       {"hour", "Original background clock hour, or -1 for the selected preset", "hour", "-1"},
                        {"frames", "Number of original 60 Hz updates before a capture", "count", "121"},
+                       {"mesh-checkpoint", "Save the live 128 x 128 clip-space surface for comparison", "file"},
                        {"width", "Capture width", "pixels", "1920"}, {"height", "Capture height", "pixels", "1080"}});
     parser.process(application);
     if (!parser.isSet("shaders") || (!parser.isSet("graph") && !parser.isSet("reference"))) parser.showHelp(2);
-    ScenePaths paths{parser.value("reference"),parser.value("cpu"),parser.value("spline"),parser.value("preset")};
+    ScenePaths paths{parser.value("reference"),parser.value("cpu"),parser.value("spline"),parser.value("preset"),
+        parser.value("month").toUInt(),parser.value("hour").toDouble()};
     if (parser.isSet("output")) {
         try {
             const QSize size(parser.value("width").toInt(), parser.value("height").toInt());
@@ -107,10 +114,20 @@ int main(int argc, char** argv) {
                 bool valid;
                 auto frames = parser.value("frames").toUInt(&valid);
                 if (!valid || frames > 36000) throw std::runtime_error("Invalid original frame count");
-                OriginalScene scene(parser.value("shaders"),paths.reference,paths.cpu,paths.spline,paths.preset);
+                OriginalScene scene(parser.value("shaders"),paths.reference,paths.cpu,paths.spline,paths.preset,paths.month,paths.hour);
                 if (!frames) scene.advance(0,size);
                 for (unsigned i = 0; i < frames; ++i) scene.advance(1.0/60,size);
                 frame = scene.capture(size);
+                if (parser.isSet("mesh-checkpoint")) {
+                    QByteArray bytes;
+                    for (float value : scene.mesh()) {
+                        const auto word = qToLittleEndian(std::bit_cast<uint32_t>(value));
+                        bytes.append(reinterpret_cast<const char*>(&word),sizeof word);
+                    }
+                    QFile output(parser.value("mesh-checkpoint"));
+                    if (!output.open(QIODevice::WriteOnly) || output.write(bytes) != bytes.size())
+                        throw std::runtime_error("Cannot save original surface checkpoint");
+                }
 #else
                 throw std::runtime_error("Build the original CPU/SPU translations to enable the live scene");
 #endif

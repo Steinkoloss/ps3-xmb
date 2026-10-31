@@ -15,6 +15,8 @@
 extern void moyou_math_func_00095F60(ppu_context*);
 extern void moyou_math_func_00093F94(ppu_context*);
 extern void moyou_math_func_00093B38(ppu_context*);
+extern void moyou_math_func_00092D34(ppu_context*);
+extern void moyou_math_func_00092E90(ppu_context*);
 
 extern "C" {
 uint8_t* vm_base = nullptr;
@@ -120,6 +122,8 @@ void ps3_hle_call(unsigned nid, ppu_context* ctx) {
     case 0xb5e28191: firmwareMath(ctx, moyou_math_func_00095F60); return;
     case 0x38e69f09: firmwareMath(ctx, moyou_math_func_00093F94); return;
     case 0xa713f8cf: firmwareMath(ctx, moyou_math_func_00093B38); return;
+    case 0xfcf08193: firmwareMath(ctx, moyou_math_func_00092D34); return;
+    case 0x23b985f7: firmwareMath(ctx, moyou_math_func_00092E90); return;
     case 0xffff0003: {
         const auto bytes = ctx->gpr[4];
         if (bytes > 0x100000 || heapCursor + bytes > 0x01500000)
@@ -364,4 +368,32 @@ RopeSolver::ExposureTables RopeSolver::exposure(float value, float white, float 
     const auto address = lockedTextures.at(0x3003)[0];
     tables.noise = {32,32,std::vector<uint8_t>(vm_base + address, vm_base + address + 32 * 32 * 4)};
     return tables;
+}
+
+RopeSolver::GlareWeights RopeSolver::glareWeights(Vector radii, float sumPower, float level) {
+    for (unsigned channel = 0; channel < 3; ++channel) {
+        if (!std::isfinite(radii[channel]) || radii[channel] < 0.34f || radii[channel] > 2.66f)
+            throw std::runtime_error("Original Gaussian radius exceeds its fixed weight array");
+        writeFloat(toneObject + 0x2b0 + channel * 4,radii[channel]);
+    }
+    if (!std::isfinite(sumPower) || !std::isfinite(level)) throw std::runtime_error("Invalid original glare parameters");
+    auto& cpu = state_->cpu;
+    cpu.gpr[3] = toneObject;
+    moyou_rope_func_02071384(&cpu); drain(&cpu);
+    GlareWeights result;
+    for (unsigned channel = 0; channel < 3; ++channel) {
+        const auto radius = vm_read32(toneObject + 0x288 + channel * 4);
+        if (radius >= 8) throw std::runtime_error("Original Gaussian exceeds its shader tap count");
+        for (unsigned tap = 0; tap <= radius; ++tap)
+            result.taps[tap][channel] = readFloat(toneObject + 0x1c8 + channel * 64 + (radius + tap) * 4);
+    }
+    float sum = 0;
+    for (unsigned i = 0; i < 6; ++i) {
+        cpu.fpr[1] = sumPower; cpu.fpr[2] = i;
+        firmwareMath(&cpu,moyou_math_func_00093F94);
+        result.levels[i] = static_cast<float>(cpu.fpr[1]);
+        sum = static_cast<float>(double(sum) + cpu.fpr[1]);
+    }
+    for (auto& weight : result.levels) weight = static_cast<float>(double(weight) / sum) * level * level;
+    return result;
 }

@@ -14,6 +14,7 @@ public:
     using Matrix = std::array<float, 16>;
     struct Texture { unsigned width, height; std::vector<uint8_t> rgba; };
     struct ExposureTables { std::array<std::vector<float>, 2> rgba; Texture noise; };
+    struct GlareWeights { std::array<Vector,8> taps{}; std::array<float,6> levels{}; };
     RopeSolver(const std::string& rendererImage, const std::string& mathImage);
     ~RopeSolver();
     RopeSolver(const RopeSolver&) = delete;
@@ -29,6 +30,7 @@ public:
     Matrix multiply(const Matrix& left, const Matrix& right);
     std::array<Texture, 2> textures();
     ExposureTables exposure(float exposure, float white, float threshold, float gamma, float dither);
+    GlareWeights glareWeights(Vector radii, float sumPower, float level);
 private:
     struct State;
     std::unique_ptr<State> state_;
