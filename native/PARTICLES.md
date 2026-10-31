@@ -42,5 +42,15 @@ the console shows only small ones. Established so far:
 - With random orientations there are fewer halos but each is still large and bright,
   so the per-glint size/brightness is the problem, not only orientation correlation.
 - About a third of particles spin about the initial quaternion's axis (0,0.707,0.707).
-Suspects: qgl random stand-in (0x2e67e2d8; the real one lives in a qgl firmware module),
-the boot-animation layer state, and fragment intensity terms (LightPack col3).
+qgl_base (dev_flash/vsh/module/qglbase.sprx, decrypted with sce.application_elf;
+module info at file offset 0x67f2c, TOC 0x76820) answers several former guesses:
+- random 0x2e67e2d8 (0x5f578): shared bss counter, Perlin-style hash, [-1, 1]. Now exact
+  (start offset unknowable: other VSH users advance it). Glints unchanged with it.
+- tick 0xd15d6a2c (0x4dfa0): per-frame counter.
+- matrix uniform set 0xab37ac81/0x91d4236f (0x1a424/0x1a1d8): store as given; uploads
+  0x193e8 (vertex) / 0x19348 (fragment) transpose with vmrghw/vmrglw — rows, as used.
+- also exported: inverse 0x5f7fc, matrix→quaternion 0x61690, lookAt 0x60e20 (not yet
+  lifted; native equivalents in RopeSolver).
+Remaining suspect: the layer's animated state normally driven by the XMB (colour,
+intensity, SPE factors; anim_coldboot_* in the renderer) and whatever else the boot
+sequence sets.
