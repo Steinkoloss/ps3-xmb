@@ -38,8 +38,10 @@ uint32_t particleCursor = particleBase;
 // Native particle render object: two vertex buffers named by tokens.
 constexpr uint32_t vertexToken = 0x7e000000;
 std::array<uint32_t, 2> vertexBuffers{};
-// qgl random (uniform [-1,1)) and tick counter. Not the firmware generator: deterministic stand-ins.
-uint32_t randomState = 0x12345678, ticks = 0, gridData = 0;
+// qgl_base (dev_flash/vsh/module/qglbase.sprx) random 0x2e67e2d8 at 0x5f578: a shared
+// counter (bss, 0 at load) hashed like the exposure noise; tick 0xd15d6a2c at 0x4dfa0 is a
+// per-frame counter. On the console both also advance for other qgl users.
+uint32_t randomState = 0, ticks = 0, gridData = 0;
 constexpr uint32_t toneObject = 0x01008000;
 constexpr std::array<uint32_t, 7> arrayFields = {0x44,0x74,0xa4,0xd4,0x104,0x134,0x164};
 constexpr uint32_t arrayBytes = 361 * 16;
@@ -286,10 +288,12 @@ void ps3_hle_call(unsigned nid, ppu_context* ctx) {
         std::memmove(vm_base + ctx->gpr[3], vm_base + ctx->gpr[4], size);
         return;
     }
-    case 0x2e67e2d8:
-        randomState ^= randomState << 13; randomState ^= randomState >> 17; randomState ^= randomState << 5;
-        ctx->fpr[1] = float(randomState >> 8) / float(1 << 23) - 1.0f;
+    case 0x2e67e2d8: {
+        const uint32_t n = ++randomState, v = n ^ (n << 13);
+        const uint32_t hash = (v * (v * v * 15731u + 789221u) + 1376312589u) & 0x7fffffffu;
+        ctx->fpr[1] = std::fma(float(hash), -9.31322574615478515625e-10f, 1.0f);   // frsp, fmadds
         return;
+    }
     case 0xd15d6a2c: ctx->gpr[3] = ticks; return;
     case 0xab37ac81: case 0x91d4236f:   // matrix uniform set: keep the value in the uniform object
         check(ctx->gpr[3] + 0x10, 64, true); check(ctx->gpr[4], 64);
