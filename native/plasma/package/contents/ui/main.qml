@@ -10,7 +10,6 @@ WallpaperItem {
         preset: root.configuration.Preset
         month: root.configuration.Month
         hour: root.configuration.Hour
-        frameRate: root.configuration.FrameRate
         glints: root.configuration.Glints
     }
 }
