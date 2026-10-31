@@ -58,8 +58,11 @@ native/check.sh
 The SPU surface stages (FFD projection and the bicubic patches) run as native ports of
 the original kernels (`SurfaceEvaluator`), matching the translated SPU code to float
 rounding (tested; `MOYOU_VERIFY_NATIVE=1` compares every frame, `MOYOU_SURFACE=original`
-runs the translation). Measured per 60 Hz update on a Ryzen 7 5700X3D: rope 1.4 ms,
-surface 0.3 ms, particles 9 ms (translated PPU code, run beside the next update).
+runs the translation). Measured per 60 Hz update on a Ryzen 7 5700X3D: rope 0.9 ms,
+surface 0.3 ms, particles 6 ms (translated PPU code, run beside the next update).
+- Hot VMX instructions in the translations use SSE versions (`tools/ppu_vmx_sse.h`,
+  staged by `lift_rope.py`), bit-identical to the ps3recomp scalar helpers; guest
+  memory accessors inline with their permission check.
 - Particles run beside the next rope/surface update; frames carry the previous
   update's particles.
 - The FFD lattice is read back asynchronously; exposure tables are cached and only

@@ -114,30 +114,31 @@ void firmwareMath(ppu_context* ctx, void (*function)(ppu_context*)) {
 }
 }
 
+// Inlined into the translations (LTO); the permission check stays on every access.
 extern "C" {
-uint8_t vm_read8(uint64_t address) { check(address, 1); return vm_base[address]; }
-uint16_t vm_read16(uint64_t address) {
+[[gnu::always_inline]] uint8_t vm_read8(uint64_t address) { check(address, 1); return vm_base[address]; }
+[[gnu::always_inline]] uint16_t vm_read16(uint64_t address) {
     check(address, 2);
     uint16_t v; std::memcpy(&v, vm_base + address, 2); return __builtin_bswap16(v);
 }
-uint32_t vm_read32(uint64_t address) {
+[[gnu::always_inline]] uint32_t vm_read32(uint64_t address) {
     check(address, 4);
     uint32_t v; std::memcpy(&v, vm_base + address, 4); return __builtin_bswap32(v);
 }
-uint64_t vm_read64(uint64_t address) {
+[[gnu::always_inline]] uint64_t vm_read64(uint64_t address) {
     check(address, 8);
     uint64_t v; std::memcpy(&v, vm_base + address, 8); return __builtin_bswap64(v);
 }
-void vm_write8(uint64_t address, uint8_t value) { check(address, 1, true); vm_base[address] = value; }
-void vm_write16(uint64_t address, uint16_t value) {
+[[gnu::always_inline]] void vm_write8(uint64_t address, uint8_t value) { check(address, 1, true); vm_base[address] = value; }
+[[gnu::always_inline]] void vm_write16(uint64_t address, uint16_t value) {
     check(address, 2, true);
     value = __builtin_bswap16(value); std::memcpy(vm_base + address, &value, 2);
 }
-void vm_write32(uint64_t address, uint32_t value) {
+[[gnu::always_inline]] void vm_write32(uint64_t address, uint32_t value) {
     check(address, 4, true);
     value = __builtin_bswap32(value); std::memcpy(vm_base + address, &value, 4);
 }
-void vm_write64(uint64_t address, uint64_t value) {
+[[gnu::always_inline]] void vm_write64(uint64_t address, uint64_t value) {
     check(address, 8, true);
     value = __builtin_bswap64(value); std::memcpy(vm_base + address, &value, 8);
 }

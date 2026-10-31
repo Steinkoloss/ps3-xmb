@@ -200,11 +200,41 @@ def prepare(args):
             header += f"constexpr uint8_t {name}_image_digest[32] = {{" + ",".join(map(str, digest)) + "};\n"
             (stage / (name + "-image.bin")).write_bytes(image)
         (stage / "rope_digests.h").write_text(header)
-        shutil.copyfile(recompiler / "runtime/ppu/ppu_vmx.h", stage / "ppu_vmx.h")
+        install_vmx(recompiler, stage)
         shutil.copyfile(recompiler / "LICENSE", stage / "ps3recomp-LICENSE")
         (stage / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
         os.rename(stage, output)
     return manifest
+
+
+# Hot VMX instructions use the SSE versions in ppu_vmx_sse.h (bit-identical to the
+# ps3recomp scalar helpers, which stay available as *_ref); generated vperm loops call
+# the shuffle version.
+VMX_SSE = {"VMX_INL void vmx_vmaddfp(": "VMX_INL void vmx_vmaddfp_ref(",
+           "VMX_INL void vmx_vnmsubfp(": "VMX_INL void vmx_vnmsubfp_ref(",
+           "VMX_FBIN(vmx_vaddfp,": "VMX_FBIN(vmx_vaddfp_ref,",
+           "VMX_FBIN(vmx_vsubfp,": "VMX_FBIN(vmx_vsubfp_ref,",
+           "VMX_BIN(vmx_vslw,": "VMX_BIN(vmx_vslw_ref,"}
+VPERM_LOOP = re.compile(
+    r"\{ uint8_t\* a = \(uint8_t\*\)&ctx->vr\[(\d+)\]; uint8_t\* b = \(uint8_t\*\)&ctx->vr\[(\d+)\]; "
+    r"uint8_t\* c = \(uint8_t\*\)&ctx->vr\[(\d+)\]; uint8_t\* d = \(uint8_t\*\)&ctx->vr\[(\d+)\]; "
+    r"uint8_t tmp\[16\]; for \(int i = 0; i < 16; i\+\+\) \{ uint8_t sel = c\[i\] & 0x1F; "
+    r"tmp\[i\] = \(sel < 16\) \? a\[sel\] : b\[sel - 16\]; \} memcpy\(d, tmp, 16\); \}")
+
+
+def install_vmx(recompiler, stage):
+    header = (recompiler / "runtime/ppu/ppu_vmx.h").read_text()
+    for original, renamed in VMX_SSE.items():
+        if header.count(original) != 1:
+            raise SystemExit(f"Unexpected ps3recomp VMX helper layout: {original}")
+        header = header.replace(original, renamed)
+    end = "#endif /* PPU_VMX_H */"
+    header = header.replace(end, '#include "ppu_vmx_sse.h"\n' + end)
+    (stage / "ppu_vmx.h").write_text(header)
+    shutil.copyfile(Path(__file__).with_name("ppu_vmx_sse.h"), stage / "ppu_vmx_sse.h")
+    for program in stage.glob("moyou_*_program.cpp"):
+        text = program.read_text()
+        program.write_text(VPERM_LOOP.sub(r"vmx_vperm(&ctx->vr[\4], &ctx->vr[\1], &ctx->vr[\2], &ctx->vr[\3]);", text))
 
 
 def main():
