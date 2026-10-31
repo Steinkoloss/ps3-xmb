@@ -1,4 +1,5 @@
 #include "Renderer.h"
+#include <QFile>
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -112,6 +113,15 @@ GLuint Renderer::imageTexture(const QString& path, GLenum wrap, GLenum type) {
     QImage image(path);
     if (image.isNull()) error("Cannot decode original texture: " + path);
     image = image.convertToFormat(QImage::Format_RGBA8888);
+    // The firmware uploads TGA rows in stored order and ignores the origin bit; Qt returns
+    // them top-down, so undo its flip for bottom-left files (measured on a running XMB: the
+    // particle iridescence matches only with stored row order).
+    if (path.endsWith(".tga",Qt::CaseInsensitive)) {
+        QFile file(path);
+        if (!file.open(QIODevice::ReadOnly)) error("Cannot read original texture: " + path);
+        const auto header = file.read(18);
+        if (header.size() == 18 && !(uint8_t(header[17]) & 0x20)) image = image.flipped(Qt::Vertical);
+    }
     GLuint texture;
     glGenTextures(1, &texture);
     glBindTexture(type, texture);
