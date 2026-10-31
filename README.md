@@ -55,13 +55,13 @@ native/check.sh
 
 ## Performance
 
-Measured at 1280×720 on this machine: 60 fps uses about 1.5–2 cores, the 30 fps
-setting about 1 core, and a hidden or unrendered wallpaper ~0% (the simulation only
-steps when the renderer takes frames). The cost is the original PPU/SPU maths:
-- SPU surface evaluation runs on up to 4 threads (`MOYOU_SPU_THREADS`), bit-identical
-  to one thread.
+The SPU surface stages (FFD projection and the bicubic patches) run as native ports of
+the original kernels (`SurfaceEvaluator`), matching the translated SPU code to float
+rounding (tested; `MOYOU_VERIFY_NATIVE=1` compares every frame, `MOYOU_SURFACE=original`
+runs the translation). Measured per 60 Hz update on a Ryzen 7 5700X3D: rope 1.4 ms,
+surface 0.3 ms, particles 9 ms (translated PPU code, run beside the next update).
 - Particles run beside the next rope/surface update; frames carry the previous
   update's particles.
 - The FFD lattice is read back asynchronously; exposure tables are cached and only
   the dither noise is regenerated (native port, checked by `--noise-check`).
-- Guest memory access uses a 4 KiB page permission table over the exact region test.
+- Translated guest code builds for `x86-64-v3` (`MOYOU_GUEST_OPTIMIZATION`).

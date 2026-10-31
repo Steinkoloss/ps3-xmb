@@ -19,6 +19,7 @@ static uint8_t original[SPU_LS_SIZE];
 static SPU_THREAD_LOCAL spu_context context;
 static SPU_THREAD_LOCAL jmp_buf escape;
 static SPU_THREAD_LOCAL uint64_t instructions, budget;
+static SPU_THREAD_LOCAL uint32_t executed_low, executed_high;
 static SPU_THREAD_LOCAL uint32_t stop_address, stop_code;
 static SPU_THREAD_LOCAL const char* failure;
 static spu_context published;
@@ -82,13 +83,14 @@ void spu_img_restore(spu_context* ctx, int32_t image) {
 
 /* Runs before every translated instruction; LTO inlines it into the translations. */
 void spu_trace_pc(spu_context* ctx, uint32_t pc);
+/* Code integrity is checked once per call over the executed range (moyou_spu_call). */
 __attribute__((always_inline)) inline void spu_trace_pc(spu_context* ctx, uint32_t pc) {
     ctx->pc = pc;
-    if (instructions == budget) fail("Instruction budget exceeded");
+    if (__builtin_expect(instructions == budget, 0)) fail("Instruction budget exceeded");
     ++instructions;
-    if (pc > SPU_LS_SIZE - 4 || pc % 4 || memcmp(ctx->ls + pc, original + pc, 4))
-        fail("Local-store code changed; static translation is no longer valid");
-    if (ctx->host_depth > 256) fail("Translated call depth exceeded");
+    if (pc < executed_low) executed_low = pc;
+    if (pc > executed_high) executed_high = pc;
+    if (__builtin_expect(ctx->host_depth > 256, 0)) fail("Translated call depth exceeded");
 }
 
 void spu_trace_rt(spu_context* ctx, uint32_t rt) { (void)ctx; (void)rt; }
@@ -147,9 +149,14 @@ int moyou_spu_call(uint32_t entry, uint64_t limit) {
     context.host_depth = 0;
     for (unsigned lane = 0; lane < 4; ++lane) context.gpr[0]._u32[lane] = stop_address;
     g_spu_trampoline_fn = NULL;
+    executed_low = SPU_LS_SIZE; executed_high = 0;
     if (setjmp(escape)) return 0;
     spu_indirect_branch(&context);
     spu_drain_call(&context, stop_address);
+    if (executed_high >= SPU_LS_SIZE - 4 || executed_low % 4 || executed_high % 4 ||
+        memcmp(context.ls + executed_low, original + executed_low, executed_high + 4 - executed_low)) {
+        failure = "Local-store code changed; static translation is no longer valid"; return 0;
+    }
     return 1;
 }
 
@@ -238,8 +245,14 @@ int main(int argc, char** argv) {
                 failure, context.pc, instructions, stop_code);
         return 1;
     }
+    executed_low = SPU_LS_SIZE; executed_high = 0;
     spu_indirect_branch(&context);
     spu_drain_call(&context, stop_address);
+    if (executed_high >= SPU_LS_SIZE - 4 ||
+        memcmp(context.ls + executed_low, original + executed_low, executed_high + 4 - executed_low)) {
+        fputs("Local-store code changed; static translation is no longer valid\n", stderr);
+        return 1;
+    }
     memcpy(input, "MOYOUO01", 8);
     put32(input + 8, context.pc);
     put32(input + 12, context.status);

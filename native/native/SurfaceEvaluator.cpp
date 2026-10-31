@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <stdexcept>
 
 namespace {
@@ -44,6 +46,9 @@ SurfaceEvaluator::SurfaceEvaluator(const std::string& original, unsigned threads
     argument(3, 1);
     argument(4, 0xffff);
     checked(moyou_spu_call(0x5fd8, 10000));
+    if (const auto* mode = std::getenv("MOYOU_SURFACE")) original_ = !std::strcmp(mode, "original");
+    verify_ = std::getenv("MOYOU_VERIFY_NATIVE") != nullptr;
+    if (!original_ && !verify_) threads = 1;  // the native stages need no SPU contexts
     if (const auto* forced = std::getenv("MOYOU_SPU_THREADS")) threads = unsigned(std::atoi(forced));
     if (!threads) threads = std::clamp(std::thread::hardware_concurrency(), 1u, 4u);
     threads = std::clamp(threads, 1u, 16u);
@@ -113,13 +118,33 @@ void SurfaceEvaluator::lattice(const std::array<Vector, 128>& controls, Vector s
                 for (unsigned i = 0; i < 4; ++i) control[i] = std::fma(control[i], scale1[i], offset[i]);
                 { const auto bytes = bigEndian(control); write(0xb380 + ((z * 7 + y) * 11 + x) * 16, bytes.data(), bytes.size()); }
             }
+    for (unsigned z = 0; z < 7; ++z)
+        for (unsigned y = 0; y < 7; ++y)
+            for (unsigned x = 0; x < 11; ++x) {
+                auto control = controls[(std::clamp(int(z) - 1, 0, 3) * 4 + std::clamp(int(y) - 1, 0, 3)) * 8 + std::clamp(int(x) - 1, 0, 7)];
+                for (unsigned i = 0; i < 4; ++i) control[i] = std::fma(control[i], scale1[i], offset[i]);
+                lattice_[(z * 7 + y) * 11 + x] = control;
+            }
+    scale2_ = scale2;
+    offset_ = offset;
+    // The original divides by the input scale with an estimate (0x3440: frest, fi); take
+    // that reciprocal from the original routine itself, once per lattice.
+    {
+        const Vector ones{1, 1, 1, 1};
+        const auto bytes = bigEndian(ones);
+        checked(moyou_spu_write(0x12000, bytes.data(), bytes.size()));
+        argument(3, 0x12000);
+        vectorArgument(4, scale1);
+        checked(moyou_spu_call(0x3440, 100));
+        reciprocal_ = result();
+    }
     { const auto bytes = bigEndian(scale1); write(0xd590, bytes.data(), bytes.size()); }
     { const auto bytes = bigEndian(scale2); write(0xd5a0, bytes.data(), bytes.size()); }
     { const auto bytes = bigEndian(offset); write(0xd5b0, bytes.data(), bytes.size()); }
     latticeReady_ = true;
 }
 
-SurfaceEvaluator::Grid SurfaceEvaluator::project(const Grid& nodes, const Matrix& matrix) {
+SurfaceEvaluator::Grid SurfaceEvaluator::projectOriginal(const Grid& nodes, const Matrix& matrix) {
     if (!latticeReady_) throw std::runtime_error("The original surface requires its live FFD lattice");
     for (unsigned column = 0; column < 4; ++column) {
         Vector v;
@@ -142,7 +167,7 @@ SurfaceEvaluator::Grid SurfaceEvaluator::project(const Grid& nodes, const Matrix
     return projected;
 }
 
-SurfaceEvaluator::Mesh SurfaceEvaluator::subdivide(const Grid& grid) {
+SurfaceEvaluator::Mesh SurfaceEvaluator::subdivideOriginal(const Grid& grid) {
     for (unsigned node = 0; node < grid.size(); ++node) {
         const auto bytes = bigEndian(grid[node]);
         write(0x9c00 + node * 16, bytes.data(), bytes.size());
@@ -168,4 +193,120 @@ SurfaceEvaluator::Mesh SurfaceEvaluator::subdivide(const Grid& grid) {
     }
     });
     return mesh;
+}
+
+namespace {
+// Uniform cubic B-spline weights and their derivatives (the original basis, 0xd5c0).
+std::array<float, 4> basis(float t) {
+    const float s = 1 - t;
+    return {s * s * s / 6, (3 * t * t * t - 6 * t * t + 4) / 6, (-3 * t * t * t + 3 * t * t + 3 * t + 1) / 6, t * t * t / 6};
+}
+std::array<float, 4> slope(float t) {
+    const float s = 1 - t;
+    return {-s * s / 2, (3 * t * t - 4 * t) / 2, (-3 * t * t + 2 * t + 1) / 2, t * t / 2};
+}
+template <class Values> float largest(const Values& a, const Values& b) {
+    float error = 0;
+    for (size_t i = 0; i < a.size(); ++i)
+        for (size_t c = 0; c < a[i].size(); ++c) error = std::max(error, std::abs(a[i][c] - b[i][c]) / std::max(1.0f, std::abs(b[i][c])));
+    return error;
+}
+}
+
+// FFD (0x3c68): lattice coordinates (node - offset) / inputScale * (8,4,4), clamped to the
+// lattice; cubic B-spline over the 11 x 7 x 7 bordered controls, plus the normalised
+// coordinate, times the output scale. Then the camera matrix (0x3bf0).
+SurfaceEvaluator::Grid SurfaceEvaluator::projectNative(const Grid& nodes, const Matrix& matrix) const {
+    if (!latticeReady_) throw std::runtime_error("The original surface requires its live FFD lattice");
+    static constexpr float extent[] = {8, 4, 4};
+    Grid projected;
+    for (unsigned node = 0; node < nodes.size(); ++node) {
+        Vector n;
+        for (unsigned i = 0; i < 4; ++i) n[i] = (nodes[node][i] - offset_[i]) * reciprocal_[i];
+        int cell[3];
+        std::array<float, 4> weight[3];
+        for (unsigned a = 0; a < 3; ++a) {
+            const float u = n[a] * extent[a];
+            cell[a] = std::clamp(int(u), 0, int(extent[a]) - 1);
+            weight[a] = basis(std::clamp(u - float(cell[a]), 0.0f, 1.0f));
+        }
+        Vector sum{};
+        for (unsigned k = 0; k < 4; ++k)
+            for (unsigned j = 0; j < 4; ++j) {
+                const float wz = weight[2][k] * weight[1][j];
+                const auto* row = &lattice_[((cell[2] + k) * 7 + cell[1] + j) * 11 + cell[0]];
+                for (unsigned i = 0; i < 4; ++i) {
+                    const float w = wz * weight[0][i];
+                    for (unsigned c = 0; c < 4; ++c) sum[c] += w * row[i][c];
+                }
+            }
+        Vector deformed;
+        for (unsigned c = 0; c < 4; ++c) deformed[c] = (sum[c] + n[c]) * scale2_[c];
+        for (unsigned r = 0; r < 4; ++r)
+            projected[node][r] = matrix[r] * deformed[0] + matrix[4 + r] * deformed[1] + matrix[8 + r] * deformed[2] + matrix[12 + r] * deformed[3];
+    }
+    return projected;
+}
+
+// Patches (0x45c0): 16 x 16 bicubic B-spline patches over the 19 x 19 controls, each sampled
+// 8 x 8 at t = k * 16/127; position, then normal = dv x du (unnormalised), then 0.
+SurfaceEvaluator::Mesh SurfaceEvaluator::subdivideNative(const Grid& grid) const {
+    std::array<std::array<float, 4>, 8> b, d;
+    for (unsigned k = 0; k < 8; ++k) { b[k] = basis(float(k) * 16.0f / 127.0f); d[k] = slope(float(k) * 16.0f / 127.0f); }
+    Mesh mesh(128 * 128);
+    for (unsigned pr = 0; pr < 16; ++pr)
+        for (unsigned pc = 0; pc < 16; ++pc) {
+            // Along u for each of the four control rows: position and u-derivative.
+            Vector along[8][4], alongSlope[8][4];
+            for (unsigned x = 0; x < 8; ++x)
+                for (unsigned r = 0; r < 4; ++r) {
+                    Vector p{}, s{};
+                    for (unsigned i = 0; i < 4; ++i) {
+                        const auto& control = grid[(pr + r) * 19 + pc + i];
+                        for (unsigned c = 0; c < 4; ++c) { p[c] += b[x][i] * control[c]; s[c] += d[x][i] * control[c]; }
+                    }
+                    along[x][r] = p; alongSlope[x][r] = s;
+                }
+            for (unsigned y = 0; y < 8; ++y)
+                for (unsigned x = 0; x < 8; ++x) {
+                    Vector p{}, du{}, dv{};
+                    for (unsigned r = 0; r < 4; ++r)
+                        for (unsigned c = 0; c < 4; ++c) {
+                            p[c] += b[y][r] * along[x][r][c];
+                            du[c] += b[y][r] * alongSlope[x][r][c];
+                            dv[c] += d[y][r] * along[x][r][c];
+                        }
+                    auto& vertex = mesh[(pr * 8 + y) * 128 + pc * 8 + x];
+                    for (unsigned c = 0; c < 4; ++c) vertex[c] = p[c];
+                    vertex[4] = dv[1] * du[2] - dv[2] * du[1];
+                    vertex[5] = dv[2] * du[0] - dv[0] * du[2];
+                    vertex[6] = dv[0] * du[1] - dv[1] * du[0];
+                    vertex[7] = 0;
+                }
+        }
+    return mesh;
+}
+
+namespace {
+template <class Values> void requireFinite(const Values& values, const char* message) {
+    for (const auto& value : values) for (float c : value) if (!std::isfinite(c)) throw std::runtime_error(message);
+}
+}
+
+SurfaceEvaluator::Grid SurfaceEvaluator::project(const Grid& nodes, const Matrix& matrix) {
+    if (original_) return projectOriginal(nodes, matrix);
+    requireFinite(nodes, "Non-finite original surface input");
+    auto native = projectNative(nodes, matrix);
+    requireFinite(native, "Non-finite original surface result");
+    if (verify_) std::fprintf(stderr, "native project: largest relative difference %.3g\n", largest(native, projectOriginal(nodes, matrix)));
+    return native;
+}
+
+SurfaceEvaluator::Mesh SurfaceEvaluator::subdivide(const Grid& grid) {
+    if (original_) return subdivideOriginal(grid);
+    requireFinite(grid, "Non-finite original surface input");
+    auto native = subdivideNative(grid);
+    requireFinite(native, "Non-finite original surface result");
+    if (verify_) std::fprintf(stderr, "native subdivide: largest relative difference %.3g\n", largest(native, subdivideOriginal(grid)));
+    return native;
 }

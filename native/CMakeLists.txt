@@ -17,7 +17,7 @@ target_compile_options(moyou-preview PRIVATE ${MOYOU_WARNINGS})
 
 # Guest translations keep strict IEEE flags at every level; -O0 is the reference build.
 # x86-64-v2 enables ps3recomp's SSE4.1 shuffles without FMA/AVX code generation.
-set(MOYOU_GUEST_OPTIMIZATION "-O2;-march=x86-64-v2" CACHE STRING "Optimization flags for original-code translations")
+set(MOYOU_GUEST_OPTIMIZATION "-O2;-march=x86-64-v3" CACHE STRING "Optimization flags for original-code translations")
 # LTO inlines the per-instruction SPU checks into the translations.
 if(NOT DEFINED CMAKE_INTERPROCEDURAL_OPTIMIZATION)
     include(CheckIPOSupported)

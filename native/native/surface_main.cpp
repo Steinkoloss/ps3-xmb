@@ -14,7 +14,8 @@ int main(int argc, char** argv) {
     parser.addHelpOption();
     parser.addOptions({{"original","Verified original spline local store.","file"},
         {"input","361 x 4 float32 little-endian clip-space controls.","file"},
-        {"output","128 x 128 x 8 float32 little-endian position/normal checkpoint.","file"}});
+        {"output","128 x 128 x 8 float32 little-endian position/normal checkpoint.","file"},
+        {"native","Evaluate with the native port instead of the translated SPU kernel."}});
     parser.process(app);
     try {
         QFile input(parser.value("input"));
@@ -25,7 +26,7 @@ int main(int argc, char** argv) {
         SurfaceEvaluator::Grid grid;
         for (unsigned n = 0; n < 361; ++n) for (unsigned c = 0; c < 4; ++c)
             grid[n][c] = std::bit_cast<float>(qFromLittleEndian<uint32_t>(bytes.constData() + n * 16 + c * 4));
-        auto mesh = evaluator.subdivide(grid);
+        auto mesh = parser.isSet("native") ? evaluator.subdivide(grid) : evaluator.subdivideOriginal(grid);
         QByteArray outputBytes;
         for (const auto& vertex : mesh) for (float value : vertex) {
             auto bits = qToLittleEndian(std::bit_cast<uint32_t>(value));

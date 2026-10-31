@@ -20,9 +20,19 @@ public:
     SurfaceEvaluator(const SurfaceEvaluator&) = delete;
     SurfaceEvaluator& operator=(const SurfaceEvaluator&) = delete;
     void lattice(const std::array<Vector, 128>& controls, Vector inputScale, Vector outputScale, Vector offset);
+    // Native ports of the SPU stages (same maths; float rounding differs at the 1e-6 level).
+    // MOYOU_SURFACE=original runs the translated SPU code instead; MOYOU_VERIFY_NATIVE=1
+    // runs both and reports the largest difference.
     Grid project(const Grid& nodes, const Matrix& matrix);
     Mesh subdivide(const Grid& clipGrid);
+    Grid projectOriginal(const Grid& nodes, const Matrix& matrix);
+    Mesh subdivideOriginal(const Grid& clipGrid);
 private:
+    Grid projectNative(const Grid& nodes, const Matrix& matrix) const;
+    Mesh subdivideNative(const Grid& clipGrid) const;
+    std::array<Vector, 7 * 7 * 11> lattice_{};
+    Vector scale2_{}, offset_{}, reciprocal_{};
+    bool original_ = false, verify_ = false;
     struct Write { uint32_t address; std::vector<uint8_t> bytes; };
     void write(uint32_t address, const void* bytes, size_t size);
     // Runs job(worker) on every context; workers first replay the logged writes.
