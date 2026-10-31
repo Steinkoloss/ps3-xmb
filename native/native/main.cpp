@@ -91,7 +91,8 @@ int main(int argc, char** argv) {
                        {"hour", "Original background clock hour, or -1 for the selected preset", "hour", "-1"},
                        {"frames", "Number of original 60 Hz updates before a capture", "count", "121"},
                        {"mesh-checkpoint", "Save the live 128 x 128 clip-space surface for comparison", "file"},
-                       {"width", "Capture width", "pixels", "1920"}, {"height", "Capture height", "pixels", "1080"}});
+                       {"width", "Capture width", "pixels", "1920"}, {"height", "Capture height", "pixels", "1080"},
+                       {"sequence", "Also save every Nth update as output-NNNNN.png (live scene)", "count", "0"}});
     parser.process(application);
     if (!parser.isSet("shaders") || (!parser.isSet("graph") && !parser.isSet("reference"))) parser.showHelp(2);
     ScenePaths paths{parser.value("reference"),parser.value("cpu"),parser.value("spline"),parser.value("preset"),
@@ -116,7 +117,15 @@ int main(int argc, char** argv) {
                 if (!valid || frames > 36000) throw std::runtime_error("Invalid original frame count");
                 OriginalScene scene(parser.value("shaders"),paths.reference,paths.cpu,paths.spline,paths.preset,paths.month,paths.hour);
                 if (!frames) scene.advance(0,size);
-                for (unsigned i = 0; i < frames; ++i) scene.advance(1.0/60,size);
+                const auto every = parser.value("sequence").toUInt();
+                for (unsigned i = 0; i < frames; ++i) {
+                    scene.advance(1.0/60,size);
+                    if (every && (i + 1) % every == 0) {
+                        auto name = parser.value("output");
+                        name.insert(name.lastIndexOf('.'), QString("-%1").arg(i + 1, 5, 10, QChar('0')));
+                        if (!scene.capture(size).save(name)) throw std::runtime_error("Cannot save sequence frame");
+                    }
+                }
                 frame = scene.capture(size);
                 if (parser.isSet("mesh-checkpoint")) {
                     QByteArray bytes;

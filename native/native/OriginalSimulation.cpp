@@ -103,10 +103,12 @@ OriginalSimulation::Frame OriginalSimulation::step(double seconds, QSize size) {
     surface_->lattice(lattice_,scale1_,scale2_,offset_);
     QMatrix4x4 projection;
     projection.perspective(53.0f,float(size.width()) / size.height(),0.1f,1000.0f);
-    // The ribbon uses its projection with the model matrix; the particle layer draws through
-    // the original camera (0x02024a68: FOV 0.925 rad, eye (0,0,2), target (0,0,-7)).
+    // Both the lines layer (0x02027d64/0x02027dcc) and the particle layer render under the
+    // original camera (0x02024a68: FOV 0.925 rad, eye (0,0,2), target (0,0,-7)), so the ribbon
+    // is P·V·M. Its on-screen span over the capture (median 65 px vs 67 px at 960x540;
+    // 78 px without the view) agrees.
     const auto view = rope_->cameraView();
-    const QMatrix4x4 ribbonProjection = projection;
+    const QMatrix4x4 ribbonProjection = projection * QMatrix4x4(view.data()).transposed();
     projection *= QMatrix4x4(view.data()).transposed();
     RopeSolver::Matrix p;
     std::copy_n(ribbonProjection.constData(),16,p.begin());

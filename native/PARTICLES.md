@@ -17,11 +17,14 @@ bit1 second. Matrix uniforms go up as rows (transpose of vectormath memory) — 
 untransposed LightPack renders nothing, MVP rows put particles on the ribbon.
 
 Camera: the original camera (constructor 0x02024a68) has FOV 0.925 rad (53°), near 0.1,
-far 1000, eye (0,0,2), target (0,0,-7), up (0,1,0) (constants at 0x02093730). The ribbon keeps
-its projection with the model matrix (drawing it through the view shrank it against the
-capture); particles use MVP P·V and Modelview V, and the emission grid uses inv(P·V) on
-the ribbon's clip-space mesh, so particles land on the ribbon on screen while their
-camera distances span 5.3-13 (19% in the near-blur range). qgl 0xc2c9c741 is
+far 1000, eye (0,0,2), target (0,0,-7), up (0,1,0) (constants at 0x02093730). The lines layer
+also renders under the camera (methods 0x02027d64/0x02027dcc apply it around update
+0x02056f1c and render 0x02057cf8, whose sheet MVP comes from the qgl stack), so the
+ribbon is P·V·M. Measured over the 22 s capture at 960x540, the ribbon's vertical span
+has median 67 px (console), 65 px (with view), 78 px (without). Particles use MVP P·V,
+Modelview V; the emission grid inv(P·V) maps the clip-space mesh to world M·node.
+Particle camera distances: 7.3-14.4, 82% in focus, 17% beyond the far focus (faded by
+far darkness). qgl 0xc2c9c741 is
 Matrix4::lookAt on the camera vectors.
 
 Open: the console shows more depth variety (soft out-of-focus dots, a denser trail
