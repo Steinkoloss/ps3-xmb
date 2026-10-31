@@ -14,7 +14,7 @@ public class PrepareMoyou extends GhidraScript {
         var memory = currentProgram.getMemory();
         var boundary = toAddr(Long.decode(args[2]));
         MemoryBlock code = memory.getBlock(boundary);
-        memory.split(code, boundary);
+        if (!code.getStart().equals(boundary)) memory.split(code, boundary);
         memory.getBlock(currentProgram.getMinAddress()).setExecute(true);
         memory.getBlock(boundary).setExecute(false);
         for (String line : Files.readAllLines(Path.of(args[0]))) {

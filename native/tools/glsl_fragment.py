@@ -78,6 +78,8 @@ def translate(program):
     sampler_names = {1066: "sampler2D", 1067: "sampler3D", 1068: "sampler2DRect"}
     lines += [f"layout(binding={unit}) uniform {sampler_names[kind]} tex{unit};"
               for unit, kind in sorted(samplers.items())]
+    if any(kind != 1067 for kind in samplers.values()):
+        lines.append("uniform vec4 textureTransform[16];")
     lines += ["void main() {", "for (int i=0; i<64; ++i) registers[i] = uvec4(0u);",
               "vec4 cc[2]; cc[0]=vec4(0.0); cc[1]=vec4(0.0);"]
     if not program.domain["depth_replace"]:
@@ -96,7 +98,8 @@ def translate(program):
             unit = field(dest, 17, 4)
             if unit not in samplers:
                 raise ValueError(f"Texture unit {unit} has no original binding")
-            coordinate = "a.xyz" if samplers[unit] == 1067 else "a.xy"
+            coordinate = "a.xyz" if samplers[unit] == 1067 else (
+                f"fma(a.xy, textureTransform[{unit}].xy, textureTransform[{unit}].zw)")
             expression = f"texture(tex{unit}, {coordinate})"
             if field(dest, 21):
                 expression = f"({expression} * 2.0 - 1.0)"

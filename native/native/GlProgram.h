@@ -4,6 +4,7 @@
 #include <QOpenGLFunctions_4_3_Core>
 #include <QOpenGLShaderProgram>
 #include <QString>
+#include <QSize>
 #include <array>
 #include <map>
 #include <vector>
@@ -17,6 +18,7 @@ public:
     GlProgram& operator=(const GlProgram&) = delete;
     void set(const QString& name, const QJsonArray& values);
     void bind();
+    void orientTexture(GLuint unit, bool flip, QSize size);
     const std::map<GLuint, GLenum>& samplers() const { return samplers_; }
 private:
     void initializeConstants(const QJsonObject& metadata, bool vertex);

@@ -18,11 +18,13 @@ GLenum pixelFormat(const QString& name) {
 }
 }
 
-Renderer::Renderer(const QString& directory, const QString& graphPath) {
+Renderer::Renderer(const QString& directory, const QString& graphPath) :
+    Renderer(directory, readObject(graphPath), QFileInfo(graphPath).absolutePath()) {}
+
+Renderer::Renderer(const QString& directory, QJsonObject graph, QString resourceRoot) :
+    root_(std::move(resourceRoot)), graph_(std::move(graph)) {
     if (!initializeOpenGLFunctions()) error("OpenGL 4.3 is required for the original-program baseline");
-    graph_ = readObject(graphPath);
     if (graph_.value("schema").toString() != "moyou.render-graph.v1") error("Unsupported render graph");
-    root_ = QFileInfo(graphPath).absolutePath();
     const auto manifest = readObject(QDir(directory).filePath("manifest.json"));
     if (manifest.value("schema").toString() != "moyou.native-shaders.v1") error("Unsupported shader manifest");
     const auto programs = manifest.value("programs").toObject();
@@ -123,8 +125,15 @@ void Renderer::bindMesh(const QString& path) {
         vertices[i] = std::bit_cast<float>(word);
         if (!std::isfinite(vertices[i])) error("Non-finite original mesh coordinate");
     }
+    mesh(vertices);
+}
+
+void Renderer::mesh(const std::vector<float>& vertices) {
+    if (vertices.size() != 128 * 128 * 9) error("Wrong-sized original surface mesh");
+    for (float value : vertices) if (!std::isfinite(value)) error("Non-finite original mesh coordinate");
     glBindBuffer(GL_ARRAY_BUFFER, meshVertices_);
-    glBufferData(GL_ARRAY_BUFFER, bytes.size(), vertices.data(), GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(vertices.size() * sizeof(float)), vertices.data(), GL_STREAM_DRAW);
+    if (indexCount_) return;
     std::vector<uint32_t> triangles;
     for (uint32_t y = 0; y < 127; ++y)
         for (uint32_t x = 0; x < 127; ++x) {
@@ -134,6 +143,32 @@ void Renderer::bindMesh(const QString& path) {
     indexCount_ = static_cast<GLsizei>(triangles.size());
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, meshIndices_);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr>(triangles.size() * sizeof(uint32_t)), triangles.data(), GL_STATIC_DRAW);
+}
+
+void Renderer::texture(const QString& name, QSize size, const void* rgba, bool floating, bool rectangle) {
+    if (name.isEmpty() || size.isEmpty() || size.width() > 8192 || size.height() > 8192) error("Invalid native texture input");
+    auto& texture = suppliedTextures_[name];
+    const GLenum type = rectangle ? GL_TEXTURE_RECTANGLE : GL_TEXTURE_2D;
+    if (!texture.texture) {
+        glGenTextures(1, &texture.texture);
+        texture.type = type;
+        ownedTextures_.push_back(texture.texture);
+    }
+    if (texture.type != type) error("Original texture target changed");
+    texture.size = size;
+    glBindTexture(type, texture.texture);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(type, 0, floating ? GL_RGBA32F : GL_RGBA8, size.width(), size.height(), 0,
+        GL_RGBA, floating ? GL_FLOAT : GL_UNSIGNED_BYTE, rgba);
+    glTexParameteri(type, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(type, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(type, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(type, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+}
+
+void Renderer::uniform(const QString& name, const QString& parameter, const QJsonArray& values) {
+    for (auto& pass : passes_) if (pass.name == name) { pass.program->set(parameter, values); return; }
+    error("Missing original pass for uniform update: " + name);
 }
 
 void Renderer::drawFullscreen() {
@@ -193,15 +228,26 @@ void Renderer::render(GLuint destination, QSize size) {
             auto binding = i.value().toObject();
             glActiveTexture(GL_TEXTURE0 + unit);
             GLuint texture;
-            if (binding.contains("pass")) {
+            bool flip = false;
+            QSize sourceSize;
+            if (binding.contains("native")) {
+                auto dependency = suppliedTextures_.find(binding.value("native").toString());
+                if (dependency == suppliedTextures_.end() || dependency->second.type != type)
+                    error("Missing or incompatible native texture in " + pass.name);
+                texture = dependency->second.texture;
+                sourceSize = dependency->second.size;
+            } else if (binding.contains("pass")) {
                 auto dependency = previous.find(binding.value("pass").toString());
                 if (dependency == previous.end()) error("Original pass samples a missing predecessor");
                 if (dependency->second->type != type) error("Original pass samples an incompatible texture target");
                 texture = dependency->second->texture;
+                sourceSize = dependency->second->size;
+                flip = true;
             } else {
                 texture = imageTexture(QDir(root_).filePath(binding.value("file").toString()),
                     binding.value("repeat").toBool() ? GL_REPEAT : GL_CLAMP_TO_EDGE, type);
             }
+            pass.program->orientTexture(unit, binding.value("flipY").toBool(flip), sourceSize);
             glBindTexture(type, texture);
         }
         if (spec.value("geometry").toString() == "sheet") drawMesh();
@@ -220,4 +266,14 @@ QImage Renderer::capture(QSize size) {
     glReadPixels(0, 0, size.width(), size.height(), GL_RGBA, GL_UNSIGNED_BYTE, image.bits());
     destroyTarget(target);
     return image.flipped(Qt::Vertical);
+}
+
+std::vector<float> Renderer::captureFloat(QSize size) {
+    auto target = createTarget(size, GL_RGBA32F);
+    render(target.framebuffer, size);
+    glBindFramebuffer(GL_FRAMEBUFFER, target.framebuffer);
+    std::vector<float> pixels(static_cast<size_t>(size.width()) * size.height() * 4);
+    glReadPixels(0, 0, size.width(), size.height(), GL_RGBA, GL_FLOAT, pixels.data());
+    destroyTarget(target);
+    return pixels;
 }

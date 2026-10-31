@@ -8,10 +8,13 @@
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <map>
 #include <stdexcept>
 #include <vector>
 
 extern void moyou_math_func_00095F60(ppu_context*);
+extern void moyou_math_func_00093F94(ppu_context*);
+extern void moyou_math_func_00093B38(ppu_context*);
 
 extern "C" {
 uint8_t* vm_base = nullptr;
@@ -25,15 +28,23 @@ PPU_THREAD_LOCAL void (*g_trampoline_fn)(void*) = nullptr;
 namespace {
 constexpr uint32_t imageBase = 0x02000000, object = 0x01000000, deformer = 0x01001000;
 constexpr uint32_t stack = 0x01ff0000, arrays = 0x01010000;
+constexpr uint32_t menu = 0x01002000, controller = 0x01004000, handle = 0x01005000;
+constexpr uint32_t heapBase = 0x01100000;
+constexpr uint32_t toneObject = 0x01008000;
 constexpr std::array<uint32_t, 7> arrayFields = {0x44,0x74,0xa4,0xd4,0x104,0x134,0x164};
 constexpr uint32_t arrayBytes = 361 * 16;
+uint32_t heapCursor = heapBase;
+std::map<uint32_t, RopeSolver::Texture> capturedTextures;
+std::map<uint32_t, std::array<uint32_t, 4>> lockedTextures;
 
 void check(uint64_t address, size_t size, bool write = false) {
     const auto end = address + size;
     bool valid = end >= address && ((address >= 0x10000 && end <= 0x800000 && !write) ||
         (address >= object && end <= 0x01020000) ||
+        (address >= heapBase && end <= 0x01500000) ||
         (address >= 0x01f00000 && end <= 0x02000000) ||
-        (address >= imageBase && end <= imageBase + renderer_image_size && !write));
+        (address >= imageBase && end <= imageBase + renderer_image_size &&
+            (!write || address >= imageBase + 0x9f000)));
     if (!valid) throw std::runtime_error("Original rope accessed an unadapted guest address: " + std::to_string(address));
 }
 
@@ -58,6 +69,14 @@ void drain(ppu_context* ctx) {
         g_trampoline_fn = nullptr;
         next(ctx);
     }
+}
+void firmwareMath(ppu_context* ctx, void (*function)(ppu_context*)) {
+    const auto toc = ctx->gpr[2], savedStack = ctx->gpr[1];
+    ctx->gpr[2] = 0x006f5558;
+    function(ctx);
+    drain(ctx);
+    ctx->gpr[2] = toc;
+    if (ctx->gpr[1] != savedStack) throw std::runtime_error("Original math did not restore its stack");
 }
 }
 
@@ -98,13 +117,46 @@ void ps3_hle_call(unsigned nid, ppu_context* ctx) {
         std::memcpy(vm_base + ctx->gpr[3], vm_base + ctx->gpr[4], size);
         return;
     }
-    case 0xb5e28191: {
-        const auto toc = ctx->gpr[2], savedStack = ctx->gpr[1];
-        ctx->gpr[2] = 0x006f5558;
-        moyou_math_func_00095F60(ctx);
-        drain(ctx);
-        ctx->gpr[2] = toc;
-        if (ctx->gpr[1] != savedStack) throw std::runtime_error("Original math did not restore its stack");
+    case 0xb5e28191: firmwareMath(ctx, moyou_math_func_00095F60); return;
+    case 0x38e69f09: firmwareMath(ctx, moyou_math_func_00093F94); return;
+    case 0xa713f8cf: firmwareMath(ctx, moyou_math_func_00093B38); return;
+    case 0xffff0003: {
+        const auto bytes = ctx->gpr[4];
+        if (bytes > 0x100000 || heapCursor + bytes > 0x01500000)
+            throw std::runtime_error("Original texture allocation exceeds native arena");
+        for (unsigned i = 0; i < 4; ++i) vm_write32(ctx->gpr[3] + i * 4, 0);
+        vm_write32(ctx->gpr[3] + 4, bytes);
+        vm_write32(ctx->gpr[3] + 12, heapCursor);
+        heapCursor = (heapCursor + bytes + 15) & ~15u;
+        return;
+    }
+    case 0xffff0004:
+        vm_write32(ctx->gpr[3] + 8, 0); vm_write32(ctx->gpr[3] + 12, 0); return;
+    case 0xadf765cd: {
+        const auto width = ctx->gpr[5], height = ctx->gpr[6];
+        if (ctx->gpr[4] != 0 || ctx->gpr[7] != 4 || ctx->gpr[8] != 0x17 ||
+            !width || !height || width * height > 65536)
+            throw std::runtime_error("Unadapted original procedural texture upload");
+        auto size = width * height * 4;
+        check(ctx->gpr[9], size);
+        capturedTextures[ctx->gpr[3]] = {unsigned(width),unsigned(height),
+            std::vector<uint8_t>(vm_base + ctx->gpr[9], vm_base + ctx->gpr[9] + size)};
+        return;
+    }
+    case 0x9d994c18: {
+        auto id = uint32_t(ctx->gpr[3]), width = uint32_t(ctx->gpr[5]), height = uint32_t(ctx->gpr[6]);
+        auto format = uint32_t(ctx->gpr[7]);
+        if (ctx->gpr[4] != 0 || width > 128 || height > 128 ||
+            (format != 0x8029 && format != 0x8018)) throw std::runtime_error("Unadapted original exposure texture lock");
+        auto found = lockedTextures.find(id);
+        if (found == lockedTextures.end()) {
+            auto bytes = width * height * 4;
+            if (heapCursor + bytes > 0x01500000) throw std::runtime_error("Original exposure textures exceed native arena");
+            found = lockedTextures.emplace(id, std::array<uint32_t,4>{heapCursor,width,height,format}).first;
+            heapCursor = (heapCursor + bytes + 127) & ~127u;
+        }
+        vm_write32(ctx->gpr[8], width * 4);
+        ctx->gpr[3] = found->second[0];
         return;
     }
     case 0xffff0001: throw std::runtime_error("Original math requested an unadapted floating-point exception");
@@ -121,8 +173,8 @@ struct RopeSolver::State {
         auto* memory = mmap(nullptr, ppu_vm_size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (memory == MAP_FAILED) throw std::runtime_error("Cannot reserve original CPU address space");
         vm_base = static_cast<uint8_t*>(memory);
-        for (const auto [start, size] : std::array<std::array<uint32_t, 2>, 3>{
-                {{0x00000000,0x00800000},{object,0x00020000},{0x01f00000,0x00200000}}}) {
+        for (const auto [start, size] : std::array<std::array<uint32_t, 2>, 4>{
+                {{0x00000000,0x00800000},{object,0x00020000},{heapBase,0x00400000},{0x01f00000,0x00200000}}}) {
             if (mprotect(vm_base + start, size, PROT_READ | PROT_WRITE)) {
                 munmap(vm_base, ppu_vm_size); vm_base = nullptr;
                 throw std::runtime_error("Cannot map original CPU memory regions");
@@ -131,6 +183,9 @@ struct RopeSolver::State {
         cpu.gpr[1] = stack;
         cpu.gpr[2] = 0x020a7d70;
         cpu.vscr = 0x10000;
+        heapCursor = heapBase;
+        capturedTextures.clear();
+        lockedTextures.clear();
     }
     ~State() { munmap(vm_base, ppu_vm_size); vm_base = nullptr; }
 };
@@ -142,6 +197,9 @@ RopeSolver::RopeSolver(const std::string& image, const std::string& math) : stat
     for (unsigned i = 0; i < arrayFields.size(); ++i) vm_write32(object + arrayFields[i], arrays + i * arrayBytes);
     vm_write32(object + 0x2c, 19);
     vm_write32(object + 0x30, 19);
+    vm_write32(menu + 0xde0, handle);
+    vm_write32(handle, controller);
+    vm_write32(controller + 0x3a0, object);
 }
 RopeSolver::~RopeSolver() = default;
 
@@ -160,6 +218,7 @@ void RopeSolver::reset(unsigned state) {
     for (uint32_t field : {0x2c0u,0x2c4u,0x2ccu,0x2c8u,0x2d4u}) vm_write32(object + field, 0);
     for (uint32_t field : {0x14u,0xb4u,0xb8u}) vm_write32(deformer + field, 0);
     vm_write8(deformer + 0xbc, 1);
+    vm_write32(object + 0x270, state);
     g_trampoline_fn = nullptr;
 }
 
@@ -210,3 +269,99 @@ RopeSolver::Nodes RopeSolver::positions() const {
 }
 float RopeSolver::time() const { return readFloat(object + 0x2c0); }
 uint32_t RopeSolver::randomState() const { return vm_read32(object + 0x2d4); }
+
+RopeSolver::Matrix RopeSolver::modelMatrix(Vector position, Vector axis, float angle) {
+    static constexpr std::array<std::pair<uint32_t, uint32_t>, 13> fields = {{
+        {0x1b8,0x274},{0x218,0x278},{0x278,0x27c},{0x2d8,0x280},{0x338,0x284},
+        {0x398,0x288},{0x3f8,0x29c},{0x458,0x28c},{0x4b8,0x290},{0x518,0x294},
+        {0x578,0x298},{0xf8,0x270},{0x158,0x2b8},
+    }};
+    for (const auto& [field, original] : fields) vm_write32(menu + field, vm_read32(object + original));
+    for (unsigned i = 0; i < 3; ++i) {
+        writeFloat(menu + 0x5d8 + i * 0x60, position[i]);
+        writeFloat(menu + 0x6f8 + i * 0x60, axis[i]);
+        vm_write8(menu + 0x5d0 + i * 0x60, 1);
+        vm_write8(menu + 0x6f0 + i * 0x60, 1);
+        vm_write32(menu + 0x878 + i * 0x60, vm_read32(object + 0x2a0 + i * 4));
+    }
+    writeFloat(menu + 0x818, angle);
+    vm_write8(menu + 0x810, 1);
+    auto& cpu = state_->cpu;
+    cpu.gpr[3] = menu;
+    moyou_rope_func_02029CC8(&cpu);
+    drain(&cpu);
+    Matrix matrix;
+    for (unsigned i = 0; i < matrix.size(); ++i) matrix[i] = readFloat(object + 0x1f0 + i * 4);
+    return matrix;
+}
+
+RopeSolver::Matrix RopeSolver::multiply(const Matrix& left, const Matrix& right) {
+    constexpr uint32_t destination = 0x01006000, a = destination + 64, b = a + 64;
+    for (unsigned i = 0; i < 16; ++i) { writeFloat(a + i * 4, left[i]); writeFloat(b + i * 4, right[i]); }
+    auto& cpu = state_->cpu;
+    cpu.gpr[3] = destination; cpu.gpr[4] = a; cpu.gpr[5] = b;
+    moyou_rope_func_0203F290(&cpu);
+    drain(&cpu);
+    Matrix matrix;
+    for (unsigned i = 0; i < 16; ++i) matrix[i] = readFloat(destination + i * 4);
+    return matrix;
+}
+
+std::array<RopeSolver::Texture, 2> RopeSolver::textures() {
+    heapCursor = heapBase;
+    capturedTextures.clear();
+    vm_write32(object + 0x14, 0x2001);
+    vm_write32(object + 0x28, 0x2002);
+    // Original module constructor 01470 computes pow(2,4) for the stripe LUT.
+    vm_write32(0x020a0f58, 16);
+    auto& cpu = state_->cpu;
+    cpu.gpr[3] = object;
+    moyou_rope_func_0204BAD0(&cpu); drain(&cpu);
+    cpu.gpr[3] = object;
+    moyou_rope_func_0204B928(&cpu); drain(&cpu);
+    if (!capturedTextures.contains(0x2001) || !capturedTextures.contains(0x2002))
+        throw std::runtime_error("Original texture generator did not upload both LUTs");
+    return {capturedTextures.at(0x2001),capturedTextures.at(0x2002)};
+}
+
+RopeSolver::ExposureTables RopeSolver::exposure(float value, float white, float threshold, float gamma, float dither) {
+    writeFloat(toneObject + 0x29c, value);
+    writeFloat(toneObject + 0x2a0, white);
+    writeFloat(toneObject + 0x2a8, threshold);
+    writeFloat(toneObject + 0x2e0, gamma);
+    writeFloat(toneObject + 0x2dc, dither);
+    vm_write32(toneObject + 0x138, 0x3001);
+    vm_write32(toneObject + 0x140, 0x3002);
+    vm_write32(toneObject + 0x148, 0x3003);
+    auto& cpu = state_->cpu;
+    cpu.gpr[3] = toneObject;
+    moyou_rope_func_02071794(&cpu); drain(&cpu);
+    ExposureTables tables;
+    for (unsigned table = 0; table < 2; ++table) {
+        auto address = lockedTextures.at(0x3001 + table)[0];
+        auto& output = tables.rgba[table];
+        output.resize(128 * 128 * 4);
+        for (unsigned pixel = 0; pixel < 128 * 128; ++pixel) {
+            for (unsigned channel = 0; channel < 2; ++channel) {
+                auto h = vm_read16(address + pixel * 4 + channel * 2);
+                uint32_t word = uint32_t(h & 0x8000) << 16;
+                auto exponent = (h >> 10) & 31, mantissa = h & 1023;
+                if (exponent == 31) word |= 0x7f800000 | (mantissa << 13);
+                else if (exponent) word |= uint32_t(exponent + 112) << 23 | (mantissa << 13);
+                else if (mantissa) {
+                    int shift = 0;
+                    while (!(mantissa & 1024)) { mantissa <<= 1; ++shift; }
+                    word |= uint32_t(113 - shift) << 23 | ((mantissa & 1023) << 13);
+                }
+                // Original G16R16F samplers expose the transposed RG lookup
+                // through XY, and the blue/glare lookup through ZW.
+                const auto destination = table == 0 ? 1 - channel : 3 - channel;
+                output[pixel * 4 + destination] = std::bit_cast<float>(word);
+            }
+            if (table == 0) output[pixel * 4 + 3] = 1;
+        }
+    }
+    const auto address = lockedTextures.at(0x3003)[0];
+    tables.noise = {32,32,std::vector<uint8_t>(vm_base + address, vm_base + address + 32 * 32 * 4)};
+    return tables;
+}

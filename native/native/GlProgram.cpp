@@ -4,6 +4,7 @@
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QVector4D>
 #include <bit>
 #include <stdexcept>
 
@@ -57,6 +58,14 @@ GlProgram::GlProgram(QOpenGLFunctions_4_3_Core& gl, const QString& directory,
 }
 
 GlProgram::~GlProgram() { gl_.glDeleteBuffers(2, buffers_); }
+
+void GlProgram::orientTexture(GLuint unit, bool flip, QSize size) {
+    const auto name = QString("textureTransform[%1]").arg(unit).toLatin1();
+    const auto location = program_.uniformLocation(name.constData());
+    if (location < 0) error("Original shader needs the framebuffer orientation adapter");
+    const auto offset = samplers_.at(unit) == GL_TEXTURE_RECTANGLE ? float(size.height()) : 1.0f;
+    program_.setUniformValue(location, QVector4D(1, flip ? -1 : 1, 0, flip ? offset : 0));
+}
 
 void GlProgram::initializeConstants(const QJsonObject& metadata, bool vertex) {
     if (vertex) {

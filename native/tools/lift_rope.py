@@ -55,9 +55,11 @@ def lift(image, base, bounds, imports, roots, toc, code_end, prefix, stage):
         instructions = disassemble_bytes(image[start - base:end - base], start)
         if any(instruction.mnemonic == "???" for instruction in instructions):
             raise ValueError(f"Undecoded original CPU instruction at {start:#x}")
-        lifter.lift_function(instructions, start, end)
+        function = lifter.lift_function(instructions, start, end)
         done.add(start)
         pending |= (lifter.call_targets | lifter.branch_targets) - done
+        if function.fallthrough_to:
+            pending |= {function.fallthrough_to} - done
         if len(done) > 128:
             raise ValueError("CPU lift escaped the bounded rope/math closure")
     source = lifter.emit_source()
@@ -96,11 +98,20 @@ def prepare(args):
         stage.mkdir()
         manifest = {"schema": "moyou.native-rope.v1", "recompiler_revision": REVISION,
                     "renderer_image_sha256": RENDERER_IMAGE_SHA256, "math_image_sha256": MATH_IMAGE_SHA256}
-        manifest["rope_functions"] = lift(renderer, 0x02000000, ranges(args.renderer_bounds),
-            imports | {0x0204c4e4: 0xffff0002}, [0x0204bed0, 0x0204f814], 0x020a7d70,
+        renderer_bounds = ranges(args.renderer_bounds)
+        # Ghidra's A2ALT decoder stops at LVLX here. The verified original
+        # routine continues to its BLR immediately before the next function.
+        if renderer_bounds.get(0x02024228) == 0x020242ac:
+            if renderer[0x243c0:0x243c4] != bytes.fromhex("4e800020"):
+                raise ValueError("Original axis-angle function boundary changed")
+            renderer_bounds[0x02024228] = 0x020243c4
+        manifest["rope_functions"] = lift(renderer, 0x02000000, renderer_bounds,
+            imports | {0x0204c4e4: 0xffff0002, 0x0204b8e8: 0xffff0003, 0x0204b49c: 0xffff0004},
+            [0x0204bed0,0x0204f814,0x02029cc8,0x0203f290,0x0204bad0,0x0204b928,0x02071794], 0x020a7d70,
             0x0208bc70, "moyou_rope_", stage)
         manifest["math_functions"] = lift(math, 0, ranges(args.math_bounds),
-            {0x00095b44: 0xffff0001}, [0x00095f60], 0x006f5558, 0x00635c08, "moyou_math_", stage)
+            {0x00095b44: 0xffff0001}, [0x00095f60,0x00093f94,0x00093b38],
+            0x006f5558, 0x00635c08, "moyou_math_", stage)
         # Native integration includes one shared context declaration per TU.
         shutil.copyfile(stage / "moyou_rope_program.h", stage / "rope_program.h")
         header = "#pragma once\n#include <cstdint>\n"

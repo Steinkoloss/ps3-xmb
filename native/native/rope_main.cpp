@@ -2,9 +2,15 @@
 #include <QCoreApplication>
 #include <QCommandLineParser>
 #include <QFile>
+#include <QDir>
+#include <QImage>
+#include <QJsonDocument>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QTextStream>
 #include <QtEndian>
 #include <bit>
+#include <map>
 #include <set>
 #include <stdexcept>
 
@@ -17,6 +23,7 @@ int main(int argc, char** argv) {
         {"math","Verified original VSH math image.","file"},
         {"settings","Original LINE1.mnu and optional override, in order.","file"},
         {"frames","Number of original 60 Hz frame updates.","count","1"},
+        {"assets","Export original procedural LUTs and model matrix.","directory"},
         {"output","361 x 4 float32 little-endian render-grid checkpoint.","file"}});
     parser.process(app);
     try {
@@ -30,6 +37,7 @@ int main(int argc, char** argv) {
             "BRIGHTNESS","MIPMAPBIAS","FRESNEL","FALLOFF","TIMESTEP","PERTURBATION","ENDX",
             "ENDY","ENDZ","FFDPARAM1"};
         unsigned state = 3;
+        std::map<QString, float> parameters;
         for (const auto& path : parser.values("settings")) {
             QFile file(path);
             if (!file.open(QIODevice::ReadOnly)) throw std::runtime_error("Cannot read original menu parameters");
@@ -38,6 +46,7 @@ int main(int argc, char** argv) {
                 if (fields.size() != 3) continue;
                 auto key = fields[0]; key.remove(' ');
                 if (key == "STATE") { state = fields[2].toUInt(&valid); if (!valid) state = 3; }
+                if (fields[1] == "float") parameters[key] = fields[2].toFloat();
                 if (!supported.contains(key)) continue;
                 const auto value = fields[2].toFloat(&valid);
                 if (!valid || fields[1] != "float") throw std::runtime_error("Invalid original float parameter");
@@ -47,6 +56,25 @@ int main(int argc, char** argv) {
         }
         if (!required.empty()) throw std::runtime_error("The original menu is missing required simulation parameters");
         rope.reset(state);
+        if (parser.isSet("assets")) {
+            QDir directory(parser.value("assets"));
+            if (!directory.mkpath(".")) throw std::runtime_error("Cannot create original asset output");
+            auto textures = rope.textures();
+            for (unsigned i = 0; i < textures.size(); ++i) {
+                const auto& t = textures[i];
+                QImage image(t.rgba.data(), int(t.width), int(t.height), int(t.width * 4), QImage::Format_RGBA8888);
+                if (!image.save(directory.filePath(i == 0 ? "stripes.png" : "encode.png")))
+                    throw std::runtime_error("Cannot save original procedural texture");
+            }
+            auto matrix = rope.modelMatrix({parameters.at("POSX"),parameters.at("POSY"),parameters.at("POSZ"),1},
+                {parameters.at("ANGX"),parameters.at("ANGY"),parameters.at("ANGZ"),0}, parameters.at("ANGROT"));
+            QJsonArray values;
+            for (auto value : matrix) values.append(value);
+            QFile metadata(directory.filePath("model.json"));
+            if (!metadata.open(QIODevice::WriteOnly) ||
+                metadata.write(QJsonDocument(QJsonObject{{"model",values}}).toJson()) < 0)
+                throw std::runtime_error("Cannot save original model matrix");
+        }
         for (unsigned frame = 0; frame < frames; ++frame) rope.advance(1.0 / 60.0);
         auto nodes = rope.positions();
         QByteArray bytes;
