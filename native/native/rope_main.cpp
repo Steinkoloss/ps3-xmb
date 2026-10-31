@@ -46,7 +46,7 @@ int main(int argc, char** argv) {
                 }
             }
             rope.particleParameters(system, menu);
-            for (uint32_t offset : {0x30u,0x60u,0x70u,0x74u,0xa0u,0xa4u,0x1328u,0x132cu,0x1334u,0x1354u,0x16f0u,0x16f4u})
+            for (uint32_t offset : {0x1484u,0x15b4u,0x1480u,0x15b0u})
                 std::printf("sys+%04x = %08x\n", offset, rope.guestWord(system + offset));
             for (unsigned frame = 1; frame <= frames; ++frame) {
                 const auto count = rope.stepParticles(system, 1.0f / 60);

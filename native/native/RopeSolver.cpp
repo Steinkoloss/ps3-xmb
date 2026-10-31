@@ -126,6 +126,18 @@ const std::map<uint32_t, void (*)(ppu_context*)> lifted = {
 const std::map<uint32_t, void (*)(ppu_context*)> lifted;
 #endif
 uint32_t particleAllocate(uint64_t bytes, uint64_t alignment);
+// Vectormath Matrix4::lookAt: column-major view matrix.
+RopeSolver::Matrix lookAt(const float* eye, const float* target, const float* up) {
+    float f[3], s[3], u[3];
+    for (unsigned i = 0; i < 3; ++i) f[i] = target[i] - eye[i];
+    const auto normalize = [](float* x) { const float l = std::sqrt(x[0]*x[0]+x[1]*x[1]+x[2]*x[2]); for (unsigned i = 0; i < 3; ++i) x[i] /= l; };
+    normalize(f);
+    s[0] = f[1]*up[2]-f[2]*up[1]; s[1] = f[2]*up[0]-f[0]*up[2]; s[2] = f[0]*up[1]-f[1]*up[0];
+    normalize(s);
+    u[0] = s[1]*f[2]-s[2]*f[1]; u[1] = s[2]*f[0]-s[0]*f[2]; u[2] = s[0]*f[1]-s[1]*f[0];
+    const auto dot = [](const float* a, const float* b) { return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; };
+    return {s[0],u[0],-f[0],0, s[1],u[1],-f[1],0, s[2],u[2],-f[2],0, -dot(s,eye),-dot(u,eye),dot(f,eye),1};
+}
 constexpr uint32_t nativeAllocate = 0x01fe0000;   // fake RSX memory manager method
 void ps3_indirect_call(ppu_context* ctx) {
     if (uint32_t(ctx->ctr) == nativeAllocate) {
@@ -270,17 +282,25 @@ void ps3_hle_call(unsigned nid, ppu_context* ctx) {
     case 0x2ecddceb: case 0x56c4aefe: case 0x5f9b0f4b: case 0x8cf83e4a: case 0xb41d0556: case 0xdcc86364:
     case 0xea37227c: case 0xf3a17538: case 0xf679d0d7: case 0xf8be4852: case 0x476a66ad:
         return;
-    case 0x2e5d5ba2: {                  // quaternion of the (identity) camera rotation
+    case 0x2e5d5ba2: {                  // quaternion of the camera rotation (unrotated look-at camera)
         check(ctx->gpr[3], 16, true);
-        for (unsigned i = 0; i < 16; ++i)
-            if (readFloat(ctx->gpr[4] + i * 4) != (i % 5 ? 0.0f : 1.0f)) throw std::runtime_error("Unadapted original camera rotation");
+        for (unsigned c = 0; c < 3; ++c) for (unsigned r = 0; r < 3; ++r)
+            if (readFloat(ctx->gpr[4] + (c * 4 + r) * 4) != (c == r ? 1.0f : 0.0f)) throw std::runtime_error("Unadapted original camera rotation");
         for (unsigned i = 0; i < 4; ++i) writeFloat(ctx->gpr[3] + i * 4, i == 3 ? 1.0f : 0.0f);
         return;
     }
-    case 0xc2c9c741:                     // Matrix3 from the camera basis rows (identity view here)
-        check(ctx->gpr[3], 48, true);
-        for (unsigned i = 0; i < 3; ++i) std::memcpy(vm_base + ctx->gpr[3] + i * 16, &ctx->vr[2 + i], 16);
+    case 0xc2c9c741: {                   // Matrix4::lookAt(eye v2, target v3, up v4), column-major
+        check(ctx->gpr[3], 64, true);
+        float v[3][4];
+        for (unsigned r = 0; r < 3; ++r) {
+            const auto* bytes = reinterpret_cast<const uint8_t*>(&ctx->vr[2 + r]);
+            for (unsigned i = 0; i < 4; ++i)
+                v[r][i] = std::bit_cast<float>(uint32_t(bytes[i*4]) << 24 | uint32_t(bytes[i*4+1]) << 16 | uint32_t(bytes[i*4+2]) << 8 | bytes[i*4+3]);
+        }
+        const auto view = lookAt(v[0], v[1], v[2]);
+        for (unsigned i = 0; i < 16; ++i) writeFloat(ctx->gpr[3] + i * 4, view[i]);
         return;
+    }
     case 0xffff0001: throw std::runtime_error("Original math requested an unadapted floating-point exception");
     case 0xffff0002: return; // GPU FFD submission is consumed by the rendering adapter.
     default: throw std::runtime_error("Unadapted original CPU import: " + std::to_string(nid));
@@ -486,11 +506,27 @@ void RopeSolver::particleParameters(uint32_t system, const std::map<std::string,
     for (unsigned i = 0; i < 11; ++i) put(0x2f + i, item[41 + i]);
 }
 
+RopeSolver::Matrix RopeSolver::cameraView() const {
+    float v[3][4];
+    for (unsigned r = 0; r < 3; ++r) for (unsigned i = 0; i < 4; ++i) v[r][i] = readFloat(0x02093730 + r * 16 + i * 4);
+    return lookAt(v[0], v[1], v[2]);
+}
+
+RopeSolver::Matrix RopeSolver::inverseCameraView() const {
+    // Rigid view: transpose the rotation, rotate the negated translation.
+    const auto m = cameraView();
+    Matrix r{};
+    for (unsigned c = 0; c < 3; ++c) for (unsigned i = 0; i < 3; ++i) r[c * 4 + i] = m[i * 4 + c];
+    for (unsigned i = 0; i < 3; ++i) r[12 + i] = -(r[i] * m[12] + r[4 + i] * m[13] + r[8 + i] * m[14]);
+    r[15] = 1;
+    return r;
+}
+
 uint32_t RopeSolver::createParticleLayer(uint32_t system) {
     const auto layer = particleAllocate(0x1100, 16), camera = particleAllocate(0x100, 16);
     vm_write32(layer + 0x18, system);
-    // Camera basis rows: the native renderer draws with an identity view.
-    for (unsigned i = 0; i < 3; ++i) writeFloat(camera + 0x60 + i * 0x14, 1.0f);
+    // Camera eye/target/up from its constructor constants (0x02024a68, applied by 0x02023ee0).
+    std::memcpy(vm_base + camera + 0x60, vm_base + 0x02093730, 48);
     vm_write32(layer + 0xb0, camera);
     return layer;
 }
@@ -513,12 +549,13 @@ void RopeSolver::emitParticles(uint32_t layer, const std::vector<std::array<floa
     ++ticks;
 }
 
-RopeSolver::ParticleUniforms RopeSolver::particleUniforms(uint32_t system, unsigned pass) {
+RopeSolver::ParticleUniforms RopeSolver::particleUniforms(uint32_t system) {
     auto& cpu = state_->cpu;
     // qgl context (unrelocated global 0x34) with one identity modelview and its cached inverse.
     if (!vm_read32(0x34)) {
         const auto context = particleAllocate(0x400, 16), entry = particleAllocate(0x100, 16);
-        for (unsigned i = 0; i < 4; ++i) { writeFloat(entry + i * 20, 1); writeFloat(entry + 0x40 + i * 20, 1); }
+        const auto view = cameraView(), inverse = inverseCameraView();
+        for (unsigned i = 0; i < 16; ++i) { writeFloat(entry + i * 4, view[i]); writeFloat(entry + 0x40 + i * 4, inverse[i]); }
         vm_write8(entry + 0x80, 1);
         vm_write32(context + 0x48 + 4, entry);
         vm_write32(context + 0x48 + 0x10, 1);
@@ -548,7 +585,10 @@ RopeSolver::ParticleUniforms RopeSolver::particleUniforms(uint32_t system, unsig
         uniforms.vertex[name] = vector(vertex + offset);
     uniforms.fragmentLightPack = matrix(fragment + 0x50);
     uniforms.fragment["_Color"] = vector(fragment + 0xb0);
-    uniforms.fragment[pass == 0 ? "_NearControl" : "_Glare"] = vector(fragment + 0x100);
+    // Fragment object (binders 0x02060044..0x0206023c): LightPack 0x50, Color 0xb0, Gamma 0xe0,
+    // NearControl 0x100, Glare 0x160, IridescentExp 0x190.
+    uniforms.fragment["_NearControl"] = vector(fragment + 0x100);
+    uniforms.fragment["_Glare"] = vector(fragment + 0x160);
     uniforms.fragment["_Gamma"] = {readFloat(fragment + 0xe0 + 0xc - 0x10 + 0x10),0,0,0};
     uniforms.fragment["_IridescentExp"] = {readFloat(fragment + 0x190 + 0xc),0,0,0};
     uniforms.passes = (vm_read32(system + 0x1484) + 1) & 3;

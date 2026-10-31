@@ -16,12 +16,19 @@ passes over the composition, before glare. Draw mask (sys+0x1484 + 1): bit0 quad
 bit1 second. Matrix uniforms go up as rows (transpose of vectormath memory) — the
 untransposed LightPack renders nothing, MVP rows put particles on the ribbon.
 
-Open: depth of field. _Focus = (6.12, 7.44, 12.2, 16.2) puts the in-focus band at
-distance 7.4-12.2 while particles (like the ribbon) sit at z -3.6..-8.8, so many render
-as large bokeh discs. Suspects: the particle camera (layer+0xb0, applied by FUN_020255a4
-in the layer render 0x0202b710) may carry its own view/projection; or the shader's depth
-convention. The console clip shows small sparkles hugging the ribbon and a dense cluster
-at the trail end. Also: deterministic RNG stand-in, emission count saturates at 2048.
+Camera: the original camera (constructor 0x02024a68) has FOV 0.925 rad (53°), near 0.1,
+far 1000, eye (0,0,2), target (0,0,-7), up (0,1,0) (constants at 0x02093730). The port had
+the FOV but no view; now the ribbon is drawn with P·V·M, particles with MVP P·V and
+Modelview V, the emission grid uses inv(P·V), and qgl 0xc2c9c741 is Matrix4::lookAt on the
+camera vectors. With the view, particles fall in the _Focus band and the quads pass
+matches the console capture.
+
+Open: the second program (glints, draw mask bit 1, enabled by the firmware default
+sys+0x15b4 = 2) draws ~15 large halos per frame; the console shows none that large. Its
+size is exp2(specular term) × _Glare.y (5.44). Unverified inputs: LightPack orientation
+(rows), the lighting space after the view change, and the SPE parameter block
+(0x020327bc writes sys+0x15c0 words 0xe, 0x20, 0x27, 0x28, 0x36 from PARTICLES_SPE.mnu:
+delta time, specular power, global alpha, size middle, glare) used by the SPU path.
 
 What runs (RopeSolver, same guest VM as the rope):
 - createParticles: original constructor 0x02060b14; render object ctor 0x0205e5c8 and

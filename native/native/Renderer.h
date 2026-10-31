@@ -23,6 +23,7 @@ public:
     void particleMask(unsigned mask) { particleMask_ = mask; }
     void texture(const QString& name, QSize size, const void* rgba, bool floating = false, bool rectangle = false);
     void uniform(const QString& pass, const QString& parameter, const QJsonArray& values);
+    void fragmentUniform(const QString& pass, const QString& parameter, const QJsonArray& values);
 private:
     struct Target { GLuint texture=0, framebuffer=0; QSize size; GLenum type=GL_TEXTURE_2D; };
     struct Pass { QString name; QJsonObject specification; std::unique_ptr<GlProgram> program; Target target; };

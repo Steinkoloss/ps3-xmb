@@ -12,7 +12,7 @@ class OriginalSimulation {
 public:
     struct Frame { std::vector<float> vertices; std::array<std::vector<float>,2> exposure; RopeSolver::Texture noise;
         std::vector<float> particles;  // 8 floats each, original PPU-path output
-        RopeSolver::ParticleUniforms particleUniforms; RopeSolver::Matrix projection{}; };
+        RopeSolver::ParticleUniforms particleUniforms; RopeSolver::Matrix projection{}, view{}; };  // projection: P·V
     // Outputs the display needs once; computed in the original call order.
     struct Constants { std::array<RopeSolver::Texture,2> textures; RopeSolver::GlareWeights glare; };
     OriginalSimulation(const QString& shaders, const QString& reference, const QString& cpu,

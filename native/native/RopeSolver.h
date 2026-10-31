@@ -36,6 +36,9 @@ public:
     uint32_t createParticles(unsigned capacity);
     void particleParameters(uint32_t system, const std::map<std::string, float>& menu);
     uint32_t createParticleLayer(uint32_t system);
+    // Original camera (constructor 0x02024a68): look-at view, column-major.
+    Matrix cameraView() const;
+    Matrix inverseCameraView() const;
     // Original emitter on a world-space grid: column-major matrix applied to 8-float vertices.
     void emitParticles(uint32_t layer, const std::vector<std::array<float, 8>>& grid, unsigned width,
                        unsigned height, const Matrix& columns);
@@ -45,8 +48,8 @@ public:
         std::map<std::string, Vector> vertex, fragment;
         unsigned passes = 0;  // bit 0: quads program, bit 1: second program
     };
-    // Original draw setup 0x0205c254: uniform values for pass 0 (quads) or 1 (second).
-    ParticleUniforms particleUniforms(uint32_t system, unsigned pass);
+    // Original draw setup 0x0205c254: uniform values for both particle programs.
+    ParticleUniforms particleUniforms(uint32_t system);
     std::vector<float> particleVertices(uint32_t system) const;
     uint32_t guestWord(uint32_t address) const;  // development inspection
 private:

@@ -83,6 +83,9 @@ OriginalSimulation::Frame OriginalSimulation::step(double seconds, QSize size) {
     surface_->lattice(lattice_,scale1_,scale2_,offset_);
     QMatrix4x4 projection;
     projection.perspective(53.0f,float(size.width()) / size.height(),0.1f,1000.0f);
+    // The original camera (FOV 0.925 rad, near 0.1, far 1000) looks from (0,0,2) towards (0,0,-7).
+    const auto view = rope_->cameraView();
+    projection *= QMatrix4x4(view.data()).transposed();
     RopeSolver::Matrix p;
     std::copy_n(projection.constData(),16,p.begin());
     auto matrix = rope_->multiply(p,model_);
@@ -99,14 +102,15 @@ OriginalSimulation::Frame OriginalSimulation::step(double seconds, QSize size) {
         vertices[index * 9 + 8] = std::min(1.0f,(0.5f-std::abs(0.5f-u))*10.0f) *
             std::min(1.0f,(0.5f-std::abs(0.5f-v))*10.0f);
     }
-    // Particles emit from the world-space ribbon: inverse projection of the clip-space mesh.
+    // Particles emit from the world-space ribbon: inverse camera projection of the clip-space mesh.
     RopeSolver::Matrix columns;
     std::copy_n(projection.inverted().constData(),16,columns.begin());
     rope_->emitParticles(particleLayer_,evaluated,128,128,columns);
     rope_->stepParticles(particles_,float(seconds));
     frame.particles = rope_->particleVertices(particles_);
-    frame.particleUniforms = rope_->particleUniforms(particles_,0);
+    frame.particleUniforms = rope_->particleUniforms(particles_);
     std::copy_n(projection.constData(),16,frame.projection.begin());
+    frame.view = view;
     auto exposure = rope_->exposure(hdr_.at("EXPOSURE"),hdr_.at("WHITELEVEL"),hdr_.at("GLARETHRESH"),1,1.0f/255);
     frame.exposure = std::move(exposure.rgba);
     frame.noise = std::move(exposure.noise);

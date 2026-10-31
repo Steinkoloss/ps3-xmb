@@ -174,6 +174,11 @@ void Renderer::texture(const QString& name, QSize size, const void* rgba, bool f
     glTexParameteri(type, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 }
 
+void Renderer::fragmentUniform(const QString& name, const QString& parameter, const QJsonArray& values) {
+    for (auto& pass : passes_) if (pass.name == name) { pass.program->set(parameter, values, 2); return; }
+    error("Missing original pass for uniform update: " + name);
+}
+
 void Renderer::uniform(const QString& name, const QString& parameter, const QJsonArray& values) {
     for (auto& pass : passes_) if (pass.name == name) { pass.program->set(parameter, values); return; }
     error("Missing original pass for uniform update: " + name);

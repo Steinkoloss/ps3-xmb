@@ -169,17 +169,19 @@ void OriginalDisplay::show(const OriginalSimulation::Frame& frame, QSize size) {
     // RSX matrix parameters are rows; vectormath memory is column-major.
     const auto rows = [](const RopeSolver::Matrix& columns) {
         QJsonArray out; for (int r = 0; r < 4; ++r) for (int c = 0; c < 4; ++c) out.append(columns[c * 4 + r]); return out; };
-    const RopeSolver::Matrix identity{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
     for (const auto* program : {"particles_quads","particles_second"}) {
         const bool second = QString(program) == "particles_second";
         display_->uniform(program,"_ModelviewProjection",rows(frame.projection));
-        display_->uniform(program,"_Modelview",rows(identity));
+        display_->uniform(program,"_Modelview",rows(frame.view));
         display_->uniform(program,"_LightPack",rows(u.lightPack));
         for (const auto& [name, count] : std::initializer_list<std::pair<const char*, int>>{{"_ParticleSize",3},
                 {"_Transparency",2},{"_Focus",4},{"_FocusCurves",3},{"_FrontFacingQuaternion",4},
                 {"_LifeBoundsMin",3},{"_LifeBoundsMax",3},{"_Darkness",2}})
             display_->uniform(program,name,array(u.vertex.at(name),count));
-        display_->uniform(program,second ? "_Glare" : "_NearControl",array(u.vertex.at(second ? "_Glare" : "_NearControl"),4));
+        // Same-named parameters exist in both stages; set the vertex value, then the fragment one.
+        const auto* both = second ? "_Glare" : "_NearControl";
+        display_->uniform(program,both,array(u.vertex.at(both),4));
+        display_->fragmentUniform(program,both,array(u.fragment.at(both),4));
         const auto light = rows(u.fragmentLightPack);
         for (int r = 0; r < 4; ++r)
             display_->uniform(program,QString("_LightPack[%1]").arg(r),QJsonArray{light[r*4],light[r*4+1],light[r*4+2],light[r*4+3]});

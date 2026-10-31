@@ -16,7 +16,8 @@ public:
     ~GlProgram();
     GlProgram(const GlProgram&) = delete;
     GlProgram& operator=(const GlProgram&) = delete;
-    void set(const QString& name, const QJsonArray& values);
+    // stages: bit 0 vertex, bit 1 fragment.
+    void set(const QString& name, const QJsonArray& values, unsigned stages = 3);
     void bind();
     void orientTexture(GLuint unit, bool flip, QSize size, bool repeat);
     const std::map<GLuint, GLenum>& samplers() const { return samplers_; }

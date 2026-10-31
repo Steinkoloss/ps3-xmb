@@ -93,10 +93,11 @@ void GlProgram::initializeConstants(const QJsonObject& metadata, bool vertex) {
     }
 }
 
-void GlProgram::set(const QString& name, const QJsonArray& values) {
+void GlProgram::set(const QString& name, const QJsonArray& values, unsigned stages) {
     if (values.isEmpty() || values.size() > 16) error("Invalid original parameter value: " + name);
     bool found = false;
     for (int stage = 0; stage < 2; ++stage) {
+        if (!(stages & (1u << stage))) continue;
         const auto& metadata = stage == 0 ? vertexMetadata_ : fragmentMetadata_;
         for (const auto& value : metadata.value("parameters").toArray()) {
             auto parameter = value.toObject();
