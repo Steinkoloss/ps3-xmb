@@ -129,9 +129,9 @@ OriginalSimulation::Frame OriginalSimulation::step(double seconds, QSize size) {
     // of the previous update (the firmware double-buffers particle vertices too).
     Particles previous;
     if (particleJob_.valid()) previous = particleJob_.get();
-    particleJob_ = std::async(std::launch::async,[this,grid = std::move(evaluated),columns,seconds] {
-        rope_->emitParticles(particleLayer_,grid,128,128,columns);
-        rope_->stepParticles(particles_,float(seconds));
+    const float aspect = float(size.width()) / size.height();
+    particleJob_ = std::async(std::launch::async,[this,grid = std::move(evaluated),columns,seconds,aspect] {
+        rope_->particleFrame(particles_,particleLayer_,grid,128,128,columns,aspect,float(seconds));
         return Particles{rope_->particleVertices(particles_),rope_->particleUniforms(particles_)};
     });
     frame.particles = std::move(previous.vertices);

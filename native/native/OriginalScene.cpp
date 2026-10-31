@@ -5,6 +5,7 @@
 #include <QMatrix4x4>
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <stdexcept>
 
 namespace {
@@ -99,7 +100,7 @@ void OriginalDisplay::build() {
         QJsonObject particles{{"name",QString(program)},{"geometry","particles"},
             {"vertex",QString("lines/lib/particles/%1.vpo").arg(program)},
             {"fragment",QString("lines/lib/particles/%1.fpo").arg(program)},
-            {"over",scene},{"blend","add"},{"format","rgba16f"},{"uniforms",QJsonObject{}},
+            {"over",scene},{"blend","add"},{"uniforms",QJsonObject{}},
             {"particleBit",QString(program) == "particles_quads" ? 1 : 2},
             {"textures",QJsonObject{{"0",QJsonObject{{"file","lines/particles/proc_iridescent.tga"}}}}}};
         passes.append(particles);

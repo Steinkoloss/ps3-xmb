@@ -39,7 +39,7 @@ uint32_t particleCursor = particleBase;
 constexpr uint32_t vertexToken = 0x7e000000;
 std::array<uint32_t, 2> vertexBuffers{};
 // qgl random (uniform [-1,1)) and tick counter. Not the firmware generator: deterministic stand-ins.
-uint32_t randomState = 0x12345678, ticks = 0;
+uint32_t randomState = 0x12345678, ticks = 0, gridData = 0;
 constexpr uint32_t toneObject = 0x01008000;
 constexpr std::array<uint32_t, 7> arrayFields = {0x44,0x74,0xa4,0xd4,0x104,0x134,0x164};
 constexpr uint32_t arrayBytes = 361 * 16;
@@ -183,6 +183,11 @@ uint32_t particleAllocate(uint64_t bytes, uint64_t alignment) {
     return uint32_t(address);
 }
 void ps3_indirect_call_to(ppu_context*, uint32_t) { throw std::runtime_error("Unadapted original CPU indirect target"); }
+// One guest thread per context and no sharing: lightweight mutex lock (0x66) / unlock (0x68) succeed.
+void lv2_syscall(ppu_context* ctx) {
+    if (ctx->gpr[11] != 0x66 && ctx->gpr[11] != 0x68) throw std::runtime_error("Unadapted original system call: " + std::to_string(ctx->gpr[11]));
+    ctx->gpr[3] = 0;
+}
 void ps3_hle_call(unsigned nid, ppu_context* ctx) {
     switch (nid) {
     case 0x831d70a5: {
@@ -274,6 +279,7 @@ void ps3_hle_call(unsigned nid, ppu_context* ctx) {
         return;
     }
     case 0x4ddb926b: ctx->fpr[1] = std::pow(float(ctx->fpr[1]), float(ctx->fpr[2])); return;  // powf
+    case 0x9379e36e: ctx->fpr[1] = std::tan(float(ctx->fpr[1])); return;                      // tanf
     case 0x5b162b7f: {                                                                       // memmove
         const auto size = ctx->gpr[5];
         check(ctx->gpr[3], size, true); check(ctx->gpr[4], size);
@@ -289,12 +295,29 @@ void ps3_hle_call(unsigned nid, ppu_context* ctx) {
         check(ctx->gpr[3] + 0x10, 64, true); check(ctx->gpr[4], 64);
         std::memcpy(vm_base + ctx->gpr[3] + 0x10, vm_base + ctx->gpr[4], 64);
         return;
-    case 0x0e428679: {                  // Matrix4 inverse; only reached for the identity view
+    case 0x0e428679: {                  // Matrix4 inverse (general cofactor inverse; qgl's own is not available)
         check(ctx->gpr[3], 64, true); check(ctx->gpr[4], 64);
-        static constexpr float identity[16] = {1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
-        for (unsigned i = 0; i < 16; ++i)
-            if (readFloat(ctx->gpr[4] + i * 4) != identity[i]) throw std::runtime_error("Unadapted original matrix inverse");
-        std::memmove(vm_base + ctx->gpr[3], vm_base + ctx->gpr[4], 64);
+        double m[16], r[16];
+        for (unsigned i = 0; i < 16; ++i) m[i] = readFloat(ctx->gpr[4] + i * 4);
+        r[0] = m[5]*m[10]*m[15]-m[5]*m[11]*m[14]-m[9]*m[6]*m[15]+m[9]*m[7]*m[14]+m[13]*m[6]*m[11]-m[13]*m[7]*m[10];
+        r[4] = -m[4]*m[10]*m[15]+m[4]*m[11]*m[14]+m[8]*m[6]*m[15]-m[8]*m[7]*m[14]-m[12]*m[6]*m[11]+m[12]*m[7]*m[10];
+        r[8] = m[4]*m[9]*m[15]-m[4]*m[11]*m[13]-m[8]*m[5]*m[15]+m[8]*m[7]*m[13]+m[12]*m[5]*m[11]-m[12]*m[7]*m[9];
+        r[12] = -m[4]*m[9]*m[14]+m[4]*m[10]*m[13]+m[8]*m[5]*m[14]-m[8]*m[6]*m[13]-m[12]*m[5]*m[10]+m[12]*m[6]*m[9];
+        r[1] = -m[1]*m[10]*m[15]+m[1]*m[11]*m[14]+m[9]*m[2]*m[15]-m[9]*m[3]*m[14]-m[13]*m[2]*m[11]+m[13]*m[3]*m[10];
+        r[5] = m[0]*m[10]*m[15]-m[0]*m[11]*m[14]-m[8]*m[2]*m[15]+m[8]*m[3]*m[14]+m[12]*m[2]*m[11]-m[12]*m[3]*m[10];
+        r[9] = -m[0]*m[9]*m[15]+m[0]*m[11]*m[13]+m[8]*m[1]*m[15]-m[8]*m[3]*m[13]-m[12]*m[1]*m[11]+m[12]*m[3]*m[9];
+        r[13] = m[0]*m[9]*m[14]-m[0]*m[10]*m[13]-m[8]*m[1]*m[14]+m[8]*m[2]*m[13]+m[12]*m[1]*m[10]-m[12]*m[2]*m[9];
+        r[2] = m[1]*m[6]*m[15]-m[1]*m[7]*m[14]-m[5]*m[2]*m[15]+m[5]*m[3]*m[14]+m[13]*m[2]*m[7]-m[13]*m[3]*m[6];
+        r[6] = -m[0]*m[6]*m[15]+m[0]*m[7]*m[14]+m[4]*m[2]*m[15]-m[4]*m[3]*m[14]-m[12]*m[2]*m[7]+m[12]*m[3]*m[6];
+        r[10] = m[0]*m[5]*m[15]-m[0]*m[7]*m[13]-m[4]*m[1]*m[15]+m[4]*m[3]*m[13]+m[12]*m[1]*m[7]-m[12]*m[3]*m[5];
+        r[14] = -m[0]*m[5]*m[14]+m[0]*m[6]*m[13]+m[4]*m[1]*m[14]-m[4]*m[2]*m[13]-m[12]*m[1]*m[6]+m[12]*m[2]*m[5];
+        r[3] = -m[1]*m[6]*m[11]+m[1]*m[7]*m[10]+m[5]*m[2]*m[11]-m[5]*m[3]*m[10]-m[9]*m[2]*m[7]+m[9]*m[3]*m[6];
+        r[7] = m[0]*m[6]*m[11]-m[0]*m[7]*m[10]-m[4]*m[2]*m[11]+m[4]*m[3]*m[10]+m[8]*m[2]*m[7]-m[8]*m[3]*m[6];
+        r[11] = -m[0]*m[5]*m[11]+m[0]*m[7]*m[9]+m[4]*m[1]*m[11]-m[4]*m[3]*m[9]-m[8]*m[1]*m[7]+m[8]*m[3]*m[5];
+        r[15] = m[0]*m[5]*m[10]-m[0]*m[6]*m[9]-m[4]*m[1]*m[10]+m[4]*m[2]*m[9]+m[8]*m[1]*m[6]-m[8]*m[2]*m[5];
+        const double det = m[0]*r[0]+m[1]*r[4]+m[2]*r[8]+m[3]*r[12];
+        if (det == 0 || !std::isfinite(det)) throw std::runtime_error("Singular original matrix inverse");
+        for (unsigned i = 0; i < 16; ++i) writeFloat(ctx->gpr[3] + i * 4, float(r[i] / det));
         return;
     }
     // Particle draw submission (texture/vertex binding, state, draw): the native renderer draws.
@@ -549,30 +572,65 @@ RopeSolver::Matrix RopeSolver::inverseCameraView() const {
 }
 
 uint32_t RopeSolver::createParticleLayer(uint32_t system) {
-    const auto layer = particleAllocate(0x1100, 16), camera = particleAllocate(0x100, 16);
-    vm_write32(layer + 0x18, system);
-    // Camera eye/target/up from its constructor constants (0x02024a68, applied by 0x02023ee0).
+    auto& cpu = state_->particleCpu;
+    // Camera (constructor 0x02024a68): near, far, FOV constants, eye/target/up.
+    const auto camera = particleAllocate(0x100, 16), handles = particleAllocate(16, 16);
+    vm_write32(camera + 8, 1);
+    for (unsigned i = 0; i < 3; ++i) vm_write32(camera + 0x18 + i * 4, vm_read32(0x0209208c + i * 4));
+    writeFloat(camera + 0x14, 16.0f / 9.0f);
     std::memcpy(vm_base + camera + 0x60, vm_base + 0x02093730, 48);
-    vm_write32(layer + 0xb0, camera);
+    vm_write32(handles, camera);
+    // Original ParticlesLayer constructor 0x020322b8(this, camera, ...); init attaches the system.
+    const auto layer = particleAllocate(0x1100, 16);
+    cpu.gpr[3] = layer;
+    cpu.gpr[4] = handles;
+    cpu.gpr[5] = cpu.gpr[6] = cpu.gpr[7] = handles + 4;
+    moyou_rope_func_020322B8(&cpu); drain(&cpu);
+    vm_write32(layer + 0x18, system);
+    // Animated colour (+0xd0, target +0xf0) and intensity (+0x120, target +0x128) start at 0
+    // and are faded in by the XMB boot animations; start at the system's own neutral values
+    // (sys+0x1340 = 1,1,1,1 and sys+0x1350 = 1), i.e. after the fade-in.
+    for (unsigned i = 0; i < 4; ++i) { writeFloat(layer + 0xd0 + i * 4, 1); writeFloat(layer + 0xf0 + i * 4, 1); }
+    writeFloat(layer + 0x120, 1);
+    writeFloat(layer + 0x128, 1);
     return layer;
 }
 
-void RopeSolver::emitParticles(uint32_t layer, const std::vector<std::array<float, 8>>& grid, unsigned width,
-                               unsigned height, const Matrix& columns) {
+unsigned RopeSolver::particleFrame(uint32_t system, uint32_t layer, const std::vector<std::array<float, 8>>& grid,
+                                   unsigned width, unsigned height, const Matrix& columns, float aspect, float seconds) {
     if (grid.size() != size_t(width) * height) throw std::runtime_error("Invalid particle emission grid");
-    auto data = vm_read32(layer + 0x1080);
-    if (!data) { data = particleAllocate(grid.size() * 32, 0x80); vm_write32(layer + 0x1080, data); }
+    if (!gridData) gridData = particleAllocate(grid.size() * 32, 0x80);
     for (size_t i = 0; i < grid.size(); ++i)
-        for (unsigned c = 0; c < 8; ++c) writeFloat(data + i * 32 + c * 4, grid[i][c]);
-    // ParticlesLayer grid (0x0202b288): vertices, width, height, matrix columns.
-    vm_write32(layer + 0x40, data);
+        for (unsigned c = 0; c < 8; ++c) writeFloat(gridData + i * 32 + c * 4, grid[i][c]);
+    writeFloat(vm_read32(layer + 0xb0) + 0x14, aspect);
+    // ParticlesLayer frame 0x02031f44: live parameters from the menu copy plus the
+    // SPE deltas scaled by the layer's clamped factors (+0x140, +0x160).
+    std::memmove(vm_base + system + 0x1360, vm_base + system + 0x1490, 0x128);
+    const auto clamp = [](float v, float lo, float hi) { return v < lo ? lo : v > hi ? hi : v; };
+    const float first = clamp(readFloat(layer + 0x140), 0, 1), second = clamp(readFloat(layer + 0x160), 0, 1);
+    const auto adjust = [&](unsigned word, float factor, float lo, float hi) {
+        writeFloat(system + 0x1360 + word * 4,
+            clamp(factor * readFloat(system + 0x15c0 + word * 4) + readFloat(system + 0x1360 + word * 4), lo, hi));
+    };
+    adjust(0xe, first, readFloat(0x02092464), readFloat(0x02092468));   // delta time
+    adjust(0x36, first, 0, 1);                                           // glare
+    adjust(0x20, first, 0, 100);                                         // specular power
+    adjust(0x28, second, 0, 90);                                         // size middle
+    adjust(0x27, second, 0, 1);                                          // global alpha
+    // Grid (0x0202b288): vertices, width, height, matrix columns.
+    vm_write32(layer + 0x40, gridData);
     vm_write32(layer + 0x44, width);
     vm_write32(layer + 0x48, height);
     for (unsigned i = 0; i < 16; ++i) writeFloat(layer + 0x50 + i * 4, columns[i]);
     auto& cpu = state_->particleCpu;
     cpu.gpr[3] = layer;
-    moyou_rope_func_02030B80(&cpu); drain(&cpu);
+    cpu.fpr[1] = seconds;
+    moyou_rope_func_02031494(&cpu); drain(&cpu);   // frame logic, simulation inputs, emitter
     ++ticks;
+    writeFloat(system + 0x1358, seconds);
+    cpu.gpr[3] = system;
+    moyou_rope_func_0205DDC8(&cpu); drain(&cpu);   // PPU update path
+    return vm_read32(system + 0x16fc);
 }
 
 RopeSolver::ParticleUniforms RopeSolver::particleUniforms(uint32_t system) {
@@ -621,15 +679,6 @@ RopeSolver::ParticleUniforms RopeSolver::particleUniforms(uint32_t system) {
     return uniforms;
 }
 
-unsigned RopeSolver::stepParticles(uint32_t system, float seconds) {
-    auto& cpu = state_->particleCpu;
-    // ParticlesLayer frame (0x02031f44): live block from the menu copy, then the PPU path.
-    std::memmove(vm_base + system + 0x1360, vm_base + system + 0x1490, 0x128);
-    writeFloat(system + 0x1358, seconds);
-    cpu.gpr[3] = system;
-    moyou_rope_func_0205DDC8(&cpu); drain(&cpu);
-    return vm_read32(system + 0x16fc);
-}
 
 uint32_t RopeSolver::guestWord(uint32_t address) const { return vm_read32(address); }
 

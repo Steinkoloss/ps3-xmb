@@ -183,6 +183,8 @@ def prepare(args):
              0x02060b14,0x0205ddc8,
              # ParticlesLayer emitter: samples the ribbon grid and queues emit commands.
              0x02030b80,
+             # ParticlesLayer constructor and frame logic (writes the simulation inputs).
+             0x020322b8,0x02031494,
              # Particle draw: uniform values for the quads/second programs.
              0x0205c254], 0x020a7d70,
             0x0208bc70, "moyou_rope_", stage)

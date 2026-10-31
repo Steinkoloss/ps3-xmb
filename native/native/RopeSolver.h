@@ -41,10 +41,10 @@ public:
     // Original camera (constructor 0x02024a68): look-at view, column-major.
     Matrix cameraView() const;
     Matrix inverseCameraView() const;
-    // Original emitter on a world-space grid: column-major matrix applied to 8-float vertices.
-    void emitParticles(uint32_t layer, const std::vector<std::array<float, 8>>& grid, unsigned width,
-                       unsigned height, const Matrix& columns);
-    unsigned stepParticles(uint32_t system, float seconds);
+    // One original ParticlesLayer frame on a world-space ribbon grid (column-major matrix on
+    // 8-float vertices): frame logic and emitter, then the PPU update. Returns the live count.
+    unsigned particleFrame(uint32_t system, uint32_t layer, const std::vector<std::array<float, 8>>& grid,
+                           unsigned width, unsigned height, const Matrix& columns, float aspect, float seconds);
     struct ParticleUniforms {
         Matrix camera{}, lightPack{}, fragmentLightPack{};
         std::map<std::string, Vector> vertex, fragment;
