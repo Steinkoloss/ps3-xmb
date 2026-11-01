@@ -2,6 +2,7 @@
 
 #include "GlProgram.h"
 #include <QImage>
+#include <QRectF>
 #include <QSize>
 #include <map>
 #include <memory>
@@ -27,6 +28,12 @@ public:
     void texture(const QString& name, QSize size, const void* rgba, bool floating = false, bool rectangle = false);
     void uniform(const QString& pass, const QString& parameter, const QJsonArray& values);
     void fragmentUniform(const QString& pass, const QString& parameter, const QJsonArray& values);
+    // Fullscreen pass texture coordinates over a sub-rectangle (top-left origin, 0-1): a
+    // screen showing one part of a wider canvas. Empty restores the full quad.
+    void quadRect(const QString& pass, QRectF rect);
+    // Geometry passes (sheet, particles) rasterize a canvas-sized viewport offset so only this
+    // rectangle (top-left origin, 0-1) lands in the target; shaders see unchanged clip space.
+    void geometryViewport(QRectF rect) { geometryViewport_ = rect; }
 private:
     struct Target { GLuint texture=0, framebuffer=0; QSize size; GLenum type=GL_TEXTURE_2D; };
     struct Pass { QString name; QJsonObject specification; std::unique_ptr<GlProgram> program; Target target; };
@@ -34,7 +41,7 @@ private:
     GLuint imageTexture(const QString& path, GLenum wrap, GLenum type);
     void destroyTarget(Target& target);
     void bindMesh(const QString& path);
-    void drawFullscreen();
+    void drawFullscreen(const QRectF* rect = nullptr);
     void drawMesh();
     void drawParticles(unsigned bit);
     std::vector<Pass> passes_;
@@ -44,7 +51,9 @@ private:
     std::vector<GLuint> ownedTextures_;
     GLuint vertexArray_=0, vertices_=0, indices_=0, meshVertices_=0, meshIndices_=0;
     GLsizei indexCount_=0, particleCount_=0;
-    GLuint particleRecords_=0, particleCorners_=0;
+    GLuint particleRecords_=0, particleCorners_=0, croppedQuad_=0;
+    std::map<QString, QRectF> quadRects_;
+    QRectF geometryViewport_{0,0,1,1};
     unsigned particleMask_=~0u;
     Target readTarget_;
     GLuint readBuffer_=0;

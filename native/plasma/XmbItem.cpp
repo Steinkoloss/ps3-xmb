@@ -9,6 +9,7 @@
 #include <QOpenGLFunctions>
 #include <QQuickOpenGLUtils>
 #include <QQuickWindow>
+#include <QScreen>
 #include <QStandardPaths>
 #include <QTimer>
 #include <algorithm>
@@ -27,6 +28,7 @@ struct XmbChannel {
     QString shaders, reference, preset;
     std::optional<OriginalSimulation::Constants> constants;
     std::shared_ptr<const OriginalSimulation::Frame> frame;   // latest; every screen reads it
+    QRect canvas;   // desktop area the latest frame was simulated for (union of the screens)
     uint64_t frameId = 0, consumed = 0;
     // Wakes the simulation when a renderer takes a frame.
     std::function<void()> taken;
@@ -35,7 +37,8 @@ struct XmbChannel {
 };
 
 // One simulation per process (the translated firmware has a single guest memory), shared
-// by every wallpaper item with the same data and preset; each screen renders its frames.
+// by every wallpaper item with the same data and preset. It is simulated for the union of
+// their screens, and each screen shows its part, so the scene spans a multi-monitor desktop.
 class XmbSimulator {
 public:
     static std::shared_ptr<XmbSimulator> acquire(const QString& data, const QString& preset, double hour) {
@@ -64,17 +67,17 @@ public:
     }
     std::shared_ptr<XmbChannel> channel() const { return channel_; }
     // Subscribers (GUI thread): updated after every frame, told about failures. The
-    // simulation runs while any of them runs, sized for the largest.
-    void subscribe(XmbItem* item, QSize size, bool running) {
-        { std::lock_guard lock(items_); subscribers_[item] = {size, running}; }
+    // simulation runs while any of them runs, for the union of their desktop rectangles.
+    void subscribe(XmbItem* item, QRect area, bool running) {
+        { std::lock_guard lock(items_); subscribers_[item] = {area, running}; }
         refresh();
     }
     void unsubscribe(XmbItem* item) {
         { std::lock_guard lock(items_); subscribers_.erase(item); }
         refresh();
     }
-    void setSize(XmbItem* item, QSize size) {
-        { std::lock_guard lock(items_); if (subscribers_.count(item)) subscribers_[item].size = size; }
+    void setArea(XmbItem* item, QRect area) {
+        { std::lock_guard lock(items_); if (subscribers_.count(item)) subscribers_[item].area = area; }
         refresh();
     }
     void setRunning(XmbItem* item, bool running) {
@@ -88,7 +91,7 @@ public:
             QMetaObject::invokeMethod(item,"fail",Qt::QueuedConnection,Q_ARG(QString,message));
     }
 private:
-    struct Subscriber { QSize size; bool running = true; };
+    struct Subscriber { QRect area; bool running = true; };
     struct Control { std::mutex mutex; std::condition_variable wake; };
     XmbSimulator(const QString& data, const QString& preset, double hour) :
         channel_(std::make_shared<XmbChannel>()), control_(std::make_shared<Control>()), root_(data), hour_(hour) {
@@ -103,16 +106,16 @@ private:
         thread_ = std::thread([this, cpu = root_.filePath("cpu"), spline = root_.filePath("spline/original-ls.bin")] { run(cpu,spline); });
     }
     void refresh() {
-        QSize largest;
+        QRect canvas;
         bool running = false;
         {
             std::lock_guard lock(items_);
             for (const auto& [item, state] : subscribers_) {
                 running = running || state.running;
-                if (state.size.width() * state.size.height() > largest.width() * largest.height()) largest = state.size;
+                if (!state.area.isEmpty()) canvas = canvas.united(state.area);
             }
         }
-        width_ = largest.width(); height_ = largest.height();
+        { std::lock_guard lock(canvasMutex_); canvas_ = canvas; }
         { std::lock_guard lock(control_->mutex); running_ = running; }
         control_->wake.notify_all();
     }
@@ -145,14 +148,16 @@ private:
                 const auto now = Clock::now();
                 const auto seconds = std::min(0.25,std::chrono::duration<double>(now - last).count());
                 last = now;
-                QSize size(width_,height_);
-                if (size.isEmpty()) size = QSize(1920,1080);
+                QRect canvas;
+                { std::lock_guard lock(canvasMutex_); canvas = canvas_; }
+                if (canvas.isEmpty()) canvas = QRect(0,0,1920,1080);
                 const double fixed = hour_;
                 simulation.setHour(fixed >= 0 ? fixed : QTime::currentTime().msecsSinceStartOfDay() / 3.6e6);
-                auto frame = std::make_shared<const OriginalSimulation::Frame>(simulation.step(seconds,size));
+                auto frame = std::make_shared<const OriginalSimulation::Frame>(simulation.step(seconds,canvas.size()));
                 {
                     std::lock_guard lock(channel_->mutex);
                     channel_->frame = std::move(frame);
+                    channel_->canvas = canvas;
                     ++channel_->frameId;
                 }
                 updateItems();
@@ -181,7 +186,8 @@ private:
     std::mutex items_;
     std::map<XmbItem*, Subscriber> subscribers_;
     bool running_ = false, stop_ = false;
-    std::atomic<int> width_{0}, height_{0};
+    std::mutex canvasMutex_;
+    QRect canvas_;
     std::atomic<double> hour_{-1};
 };
 
@@ -195,6 +201,7 @@ public:
         month_ = item->month();
         hour_ = item->hour();
         glints_ = item->glints();
+        area_ = item->desktopArea();
     }
     QOpenGLFramebufferObject* createFramebufferObject(const QSize& size) override {
         QOpenGLFramebufferObjectFormat format;
@@ -229,6 +236,7 @@ private:
         const unsigned month = month_ > 0 ? unsigned(month_) : unsigned(now.date().month());
         const double hour = hour_ >= 0 ? hour_ : now.time().msecsSinceStartOfDay() / 3.6e6;
         std::shared_ptr<const OriginalSimulation::Frame> frame;
+        QRect canvas;
         uint64_t id;
         {
             std::lock_guard lock(channel_->mutex);
@@ -238,7 +246,7 @@ private:
                 monthShown_ = month; hourShown_ = hour;
             }
             id = channel_->frameId;
-            if (display_ && id != shown_) frame = channel_->frame;
+            if (display_ && id != shown_) { frame = channel_->frame; canvas = channel_->canvas; }
             channel_->consumed = std::max(channel_->consumed, id);
         }
         if (channel_->taken) channel_->taken();
@@ -249,7 +257,22 @@ private:
             if (frame) shown_ = 0;
         }
         display_->setGlints(glints_);
-        if (frame && !frame->vertices.empty()) { display_->show(*frame,size); shown_ = id; }
+        if (frame && !frame->vertices.empty()) {
+            // This screen's part of the canvas the frame was simulated for.
+            QRectF viewport(0,0,1,1);
+            if (!canvas.isEmpty() && canvas.contains(area_) && !area_.isEmpty())
+                viewport = QRectF(double(area_.x() - canvas.x()) / canvas.width(),double(area_.y() - canvas.y()) / canvas.height(),
+                    double(area_.width()) / canvas.width(),double(area_.height()) / canvas.height());
+            if (viewport != viewport_) {
+                viewport_ = viewport;
+                qInfo("PS3 XMB background: canvas %d,%d %dx%d area %d,%d %dx%d viewport %.4f,%.4f %.4fx%.4f target %dx%d",
+                    canvas.x(),canvas.y(),canvas.width(),canvas.height(),area_.x(),area_.y(),area_.width(),area_.height(),
+                    viewport.x(),viewport.y(),viewport.width(),viewport.height(),size.width(),size.height());
+            }
+            display_->setViewport(viewport);
+            display_->show(*frame,size);
+            shown_ = id;
+        }
         else if (!shown_) return false;
         display_->render(framebufferObject()->handle(),size);
         return true;
@@ -262,6 +285,8 @@ private:
     unsigned monthShown_ = 0;
     double hourShown_ = 0;
     bool failed_ = false, glints_ = true;
+    QRect area_;
+    QRectF viewport_;
 };
 }
 
@@ -317,10 +342,39 @@ void XmbItem::componentComplete() {
 
 void XmbItem::geometryChange(const QRectF& next, const QRectF& previous) {
     QQuickFramebufferObject::geometryChange(next,previous);
-    if (simulator_) {
-        const auto ratio = window() ? window()->effectiveDevicePixelRatio() : 1.0;
-        simulator_->setSize(this, (next.size() * ratio).toSize());
-    }
+    areaChanged();
+}
+
+// Desktop rectangle (logical pixels) this item covers: its screen's position plus its place
+// in the window. Wayland does not expose window positions, but a wallpaper window fills its
+// screen, so the screen geometry places it.
+QRect XmbItem::desktopArea() const {
+    std::lock_guard lock(areaMutex_);
+    return area_;
+}
+
+void XmbItem::areaChanged() {
+    QRect area(QPoint(),size().toSize());
+    if (auto* w = window(); w && w->screen())
+        area.moveTopLeft(w->screen()->geometry().topLeft() + mapToScene(QPointF()).toPoint());
+    { std::lock_guard lock(areaMutex_); area_ = area; }
+    if (simulator_) simulator_->setArea(this, area);
+    update();
+}
+
+void XmbItem::itemChange(ItemChange change, const ItemChangeData& data) {
+    QQuickFramebufferObject::itemChange(change,data);
+    if (change != ItemSceneChange) return;
+    QObject::disconnect(screenConnection_);
+    QObject::disconnect(screenGeometryConnection_);
+    if (!data.window) return;
+    const auto watch = [this](QScreen* screen) {
+        QObject::disconnect(screenGeometryConnection_);
+        if (screen) screenGeometryConnection_ = connect(screen,&QScreen::geometryChanged,this,[this] { areaChanged(); });
+        areaChanged();
+    };
+    screenConnection_ = connect(data.window,&QWindow::screenChanged,this,watch);
+    watch(data.window->screen());
 }
 
 void XmbItem::restart() {
@@ -335,8 +389,7 @@ void XmbItem::restart() {
     // set, so an unset preset follows the clock like the console.
     simulator_ = XmbSimulator::acquire(data,preset_.isEmpty() ? QStringLiteral("clock") : preset_,hour_);
     QTimer::singleShot(120000,this,[this] { if (error_.isEmpty()) retryDelay_ = 2; });
-    const auto ratio = window() ? window()->effectiveDevicePixelRatio() : 1.0;
-    simulator_->subscribe(this,(size() * ratio).toSize(),running_);
+    simulator_->subscribe(this,desktopArea(),running_);
     if (hour_ >= 0) simulator_->setHour(hour_);
     update();
 }

@@ -10,6 +10,9 @@ public:
     void setTime(unsigned month, double hour);
     // Firmware draws the glint pass (draw mask bit 1); off hides it.
     void setGlints(bool enabled) { glints_ = enabled; }
+    // Part of the simulated canvas this display shows (top-left origin, 0-1): screens of a
+    // multi-monitor desktop each show their slice of one wider scene.
+    void setViewport(QRectF viewport) { viewport_ = viewport; }
     void show(const OriginalSimulation::Frame& frame, QSize size);
     void render(GLuint target, QSize size) { display_->render(target,size); }
     QImage capture(QSize size);
@@ -24,6 +27,7 @@ private:
     unsigned month_ = 0;
     double hour_ = 0;
     bool glints_ = true;
+    QRectF viewport_{0,0,1,1};
     std::unique_ptr<Renderer> display_;
 };
 
@@ -33,6 +37,8 @@ public:
     OriginalScene(const QString& shaders, const QString& reference, const QString& cpu,
                   const QString& spline, const QString& preset, unsigned month = 7, double hour = -1);
     void advance(double seconds, QSize size);
+    // Simulate for the whole canvas, display only the viewport (pixels within the canvas).
+    void advance(double seconds, QSize canvas, QRect viewport);
     void render(GLuint target, QSize size) { display_.render(target,size); }
     QImage capture(QSize size) { return display_.capture(size); }
     const std::vector<float>& mesh() const { return frame_.vertices; }

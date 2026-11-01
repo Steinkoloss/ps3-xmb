@@ -80,6 +80,7 @@ Renderer::~Renderer() {
     glDeleteTextures(static_cast<GLsizei>(ownedTextures_.size()), ownedTextures_.data());
     GLuint buffers[] = {vertices_, indices_, meshVertices_, meshIndices_, particleRecords_, particleCorners_};
     glDeleteBuffers(6, buffers);
+    if (croppedQuad_) glDeleteBuffers(1, &croppedQuad_);
     glDeleteVertexArrays(1, &vertexArray_);
 }
 
@@ -198,8 +199,20 @@ void Renderer::uniform(const QString& name, const QString& parameter, const QJso
     error("Missing original pass for uniform update: " + name);
 }
 
-void Renderer::drawFullscreen() {
-    glBindBuffer(GL_ARRAY_BUFFER, vertices_);
+void Renderer::quadRect(const QString& pass, QRectF rect) {
+    if (rect.isEmpty()) quadRects_.erase(pass); else quadRects_[pass] = rect;
+}
+
+void Renderer::drawFullscreen(const QRectF* rect) {
+    if (rect) {
+        // Same quad as vertices_ (texture v runs top to bottom) over the sub-rectangle.
+        const float u0 = float(rect->left()), u1 = float(rect->right()), v0 = float(rect->top()), v1 = float(rect->bottom());
+        const float quad[] = {-1,-1,0,1, u0,v1, 1,-1,0,1, u1,v1, 1,1,0,1, u1,v0, -1,1,0,1, u0,v0};
+        if (!croppedQuad_) glGenBuffers(1, &croppedQuad_);
+        glBindBuffer(GL_ARRAY_BUFFER, croppedQuad_);
+        glBufferData(GL_ARRAY_BUFFER, sizeof quad, quad, GL_STREAM_DRAW);
+    } else
+        glBindBuffer(GL_ARRAY_BUFFER, vertices_);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, indices_);
     for (GLuint i = 0; i < 16; ++i) glDisableVertexAttribArray(i);
     glEnableVertexAttribArray(0);
@@ -276,6 +289,13 @@ void Renderer::render(GLuint destination, QSize size) {
         glDisable(GL_BLEND);
         glClearColor(0,0,0,0);
         glClear(GL_COLOR_BUFFER_BIT);
+        const auto geometry = spec.value("geometry").toString();
+        if ((geometry == "sheet" || geometry == "particles") && geometryViewport_ != QRectF(0,0,1,1)) {
+            const double width = dimensions.width() / geometryViewport_.width(), height = dimensions.height() / geometryViewport_.height();
+            glViewport(GLint(std::lround(-geometryViewport_.left() * width)),
+                GLint(std::lround(-(1 - geometryViewport_.bottom()) * height)),
+                GLsizei(std::lround(width)), GLsizei(std::lround(height)));
+        }
         if (spec.contains("over")) {
             auto base = previous.find(spec.value("over").toString());
             if (base == previous.end()) error("Original blend pass has no base framebuffer");
@@ -331,7 +351,10 @@ void Renderer::render(GLuint destination, QSize size) {
         }
         if (spec.value("geometry").toString() == "sheet") drawMesh();
         else if (spec.value("geometry").toString() == "particles") drawParticles(unsigned(spec.value("particleBit").toInt(1)));
-        else drawFullscreen();
+        else {
+            const auto crop = quadRects_.find(pass.name);
+            drawFullscreen(crop == quadRects_.end() ? nullptr : &crop->second);
+        }
         if (spec.value("mipmaps").toBool()) {
             if (final || pass.target.type != GL_TEXTURE_2D) error("Original mipmap source needs an intermediate 2D target");
             glBindTexture(GL_TEXTURE_2D,pass.target.texture);

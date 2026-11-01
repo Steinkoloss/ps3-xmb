@@ -2,6 +2,7 @@
 #include <QQuickFramebufferObject>
 #include <QtQml/qqmlregistration.h>
 #include <memory>
+#include <mutex>
 
 class XmbSimulator;
 struct XmbChannel;
@@ -47,6 +48,7 @@ public:
     QString error() const { return error_; }
 
     std::shared_ptr<XmbChannel> channel() const;
+    QRect desktopArea() const;   // read by the scene-graph renderer
     Q_INVOKABLE void fail(const QString& message);
 signals:
     void sourceChanged();
@@ -58,8 +60,13 @@ signals:
 protected:
     void componentComplete() override;
     void geometryChange(const QRectF& next, const QRectF& previous) override;
+    void itemChange(ItemChange change, const ItemChangeData& data) override;
 private:
     void restart();
+    void areaChanged();
+    mutable std::mutex areaMutex_;
+    QRect area_;
+    QMetaObject::Connection screenConnection_, screenGeometryConnection_;
     QString dataDirectory_, preset_, error_;
     int month_ = 0;
     double hour_ = -1;

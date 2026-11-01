@@ -92,6 +92,7 @@ int main(int argc, char** argv) {
                        {"frames", "Number of original 60 Hz updates before a capture", "count", "121"},
                        {"mesh-checkpoint", "Save the live 128 x 128 clip-space surface for comparison", "file"},
                        {"width", "Capture width", "pixels", "1920"}, {"height", "Capture height", "pixels", "1080"},
+                       {"viewport", "Show only this part of the width x height canvas (live scene)", "x,y,w,h"},
                        {"sequence", "Also save every Nth update as output-NNNNN.png (live scene)", "count", "0"}});
     parser.process(application);
     if (!parser.isSet("shaders") || (!parser.isSet("graph") && !parser.isSet("reference"))) parser.showHelp(2);
@@ -99,7 +100,7 @@ int main(int argc, char** argv) {
         parser.value("month").toUInt(),parser.value("hour").toDouble()};
     if (parser.isSet("output")) {
         try {
-            const QSize size(parser.value("width").toInt(), parser.value("height").toInt());
+            QSize size(parser.value("width").toInt(), parser.value("height").toInt());
             if (size.width() < 1 || size.height() < 1 || size.width() > 8192 || size.height() > 8192)
                 throw std::runtime_error("Invalid capture dimensions");
             QOpenGLContext context;
@@ -116,10 +117,19 @@ int main(int argc, char** argv) {
                 auto frames = parser.value("frames").toUInt(&valid);
                 if (!valid || frames > 36000) throw std::runtime_error("Invalid original frame count");
                 OriginalScene scene(parser.value("shaders"),paths.reference,paths.cpu,paths.spline,paths.preset,paths.month,paths.hour);
-                if (!frames) scene.advance(0,size);
+                const auto canvas = size;
+                QRect viewport(QPoint(),canvas);
+                if (parser.isSet("viewport")) {
+                    const auto fields = parser.value("viewport").split(',');
+                    if (fields.size() != 4) throw std::runtime_error("Invalid viewport");
+                    viewport = QRect(fields[0].toInt(),fields[1].toInt(),fields[2].toInt(),fields[3].toInt());
+                    if (viewport.isEmpty() || !QRect(QPoint(),canvas).contains(viewport)) throw std::runtime_error("Viewport outside the canvas");
+                    size = viewport.size();
+                }
+                if (!frames) scene.advance(0,canvas,viewport);
                 const auto every = parser.value("sequence").toUInt();
                 for (unsigned i = 0; i < frames; ++i) {
-                    scene.advance(1.0/60,size);
+                    scene.advance(1.0/60,canvas,viewport);
                     if (every && (i + 1) % every == 0) {
                         auto name = parser.value("output");
                         name.insert(name.lastIndexOf('.'), QString("-%1").arg(i + 1, 5, 10, QChar('0')));

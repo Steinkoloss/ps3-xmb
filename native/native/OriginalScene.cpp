@@ -209,6 +209,11 @@ void OriginalDisplay::applyMenus(const OriginalSimulation::Frame& frame) {
 
 void OriginalDisplay::show(const OriginalSimulation::Frame& frame, QSize size) {
     if (frame.menus != menus_) applyMenus(frame);
+    // A screen showing part of a wider canvas: geometry rasterizes through an offset viewport,
+    // the background gradient samples the same sub-rectangle.
+    const bool cropped = viewport_ != QRectF(0,0,1,1);
+    display_->geometryViewport(viewport_);
+    display_->quadRect("background",cropped ? viewport_ : QRectF());
     display_->mesh(frame.vertices);
     for (unsigned i = 0; i < 2; ++i) display_->texture(QString("exposure%1").arg(i),QSize(128,128),frame.exposure[i].data(),true,true);
     display_->texture("noise",QSize(32,32),frame.noise.rgba.data(),false,true);
@@ -251,6 +256,12 @@ OriginalScene::OriginalScene(const QString& shaders, const QString& reference, c
     display_(shaders,reference,preset,simulation_.constants(),month,hour) {}
 
 void OriginalScene::advance(double seconds, QSize size) {
-    frame_ = simulation_.step(seconds,size);
-    display_.show(frame_,size);
+    advance(seconds,size,QRect(QPoint(),size));
+}
+
+void OriginalScene::advance(double seconds, QSize canvas, QRect viewport) {
+    frame_ = simulation_.step(seconds,canvas);
+    display_.setViewport(QRectF(double(viewport.x()) / canvas.width(),double(viewport.y()) / canvas.height(),
+        double(viewport.width()) / canvas.width(),double(viewport.height()) / canvas.height()));
+    display_.show(frame_,viewport.size());
 }
