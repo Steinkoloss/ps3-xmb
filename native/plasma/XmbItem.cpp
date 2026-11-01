@@ -1,4 +1,5 @@
 #include "XmbItem.h"
+#include "DesktopLayout.h"
 #include <QTime>
 #include "OriginalScene.h"
 #include <QDateTime>
@@ -10,6 +11,7 @@
 #include <QQuickOpenGLUtils>
 #include <QQuickWindow>
 #include <QScreen>
+#include <QGuiApplication>
 #include <QStandardPaths>
 #include <QTimer>
 #include <algorithm>
@@ -28,7 +30,7 @@ struct XmbChannel {
     QString shaders, reference, preset;
     std::optional<OriginalSimulation::Constants> constants;
     std::shared_ptr<const OriginalSimulation::Frame> frame;   // latest; every screen reads it
-    QRect canvas;   // desktop area the latest frame was simulated for (union of the screens)
+    QRectF canvas;   // desktop area (millimetres) the latest frame was simulated for
     uint64_t frameId = 0, consumed = 0;
     // Wakes the simulation when a renderer takes a frame.
     std::function<void()> taken;
@@ -68,7 +70,7 @@ public:
     std::shared_ptr<XmbChannel> channel() const { return channel_; }
     // Subscribers (GUI thread): updated after every frame, told about failures. The
     // simulation runs while any of them runs, for the union of their desktop rectangles.
-    void subscribe(XmbItem* item, QRect area, bool running) {
+    void subscribe(XmbItem* item, QRectF area, bool running) {
         { std::lock_guard lock(items_); subscribers_[item] = {area, running}; }
         refresh();
     }
@@ -76,7 +78,7 @@ public:
         { std::lock_guard lock(items_); subscribers_.erase(item); }
         refresh();
     }
-    void setArea(XmbItem* item, QRect area) {
+    void setArea(XmbItem* item, QRectF area) {
         { std::lock_guard lock(items_); if (subscribers_.count(item)) subscribers_[item].area = area; }
         refresh();
     }
@@ -91,7 +93,7 @@ public:
             QMetaObject::invokeMethod(item,"fail",Qt::QueuedConnection,Q_ARG(QString,message));
     }
 private:
-    struct Subscriber { QRect area; bool running = true; };
+    struct Subscriber { QRectF area; bool running = true; };
     struct Control { std::mutex mutex; std::condition_variable wake; };
     XmbSimulator(const QString& data, const QString& preset, double hour) :
         channel_(std::make_shared<XmbChannel>()), control_(std::make_shared<Control>()), root_(data), hour_(hour) {
@@ -106,7 +108,7 @@ private:
         thread_ = std::thread([this, cpu = root_.filePath("cpu"), spline = root_.filePath("spline/original-ls.bin")] { run(cpu,spline); });
     }
     void refresh() {
-        QRect canvas;
+        QRectF canvas;
         bool running = false;
         {
             std::lock_guard lock(items_);
@@ -148,12 +150,13 @@ private:
                 const auto now = Clock::now();
                 const auto seconds = std::min(0.25,std::chrono::duration<double>(now - last).count());
                 last = now;
-                QRect canvas;
+                QRectF canvas;
                 { std::lock_guard lock(canvasMutex_); canvas = canvas_; }
-                if (canvas.isEmpty()) canvas = QRect(0,0,1920,1080);
+                if (canvas.isEmpty()) canvas = QRectF(0,0,16,9);
                 const double fixed = hour_;
                 simulation.setHour(fixed >= 0 ? fixed : QTime::currentTime().msecsSinceStartOfDay() / 3.6e6);
-                auto frame = std::make_shared<const OriginalSimulation::Frame>(simulation.step(seconds,canvas.size()));
+                auto frame = std::make_shared<const OriginalSimulation::Frame>(simulation.step(seconds,
+                    QSize(std::max(1,int(std::lround(canvas.width() * 10))),std::max(1,int(std::lround(canvas.height() * 10))))));
                 {
                     std::lock_guard lock(channel_->mutex);
                     channel_->frame = std::move(frame);
@@ -187,7 +190,7 @@ private:
     std::map<XmbItem*, Subscriber> subscribers_;
     bool running_ = false, stop_ = false;
     std::mutex canvasMutex_;
-    QRect canvas_;
+    QRectF canvas_;
     std::atomic<double> hour_{-1};
 };
 
@@ -236,7 +239,7 @@ private:
         const unsigned month = month_ > 0 ? unsigned(month_) : unsigned(now.date().month());
         const double hour = hour_ >= 0 ? hour_ : now.time().msecsSinceStartOfDay() / 3.6e6;
         std::shared_ptr<const OriginalSimulation::Frame> frame;
-        QRect canvas;
+        QRectF canvas;
         uint64_t id;
         {
             std::lock_guard lock(channel_->mutex);
@@ -260,12 +263,12 @@ private:
         if (frame && !frame->vertices.empty()) {
             // This screen's part of the canvas the frame was simulated for.
             QRectF viewport(0,0,1,1);
-            if (!canvas.isEmpty() && canvas.contains(area_) && !area_.isEmpty())
+            if (!canvas.isEmpty() && !area_.isEmpty() && canvas.adjusted(-0.01,-0.01,0.01,0.01).contains(area_))
                 viewport = QRectF(double(area_.x() - canvas.x()) / canvas.width(),double(area_.y() - canvas.y()) / canvas.height(),
                     double(area_.width()) / canvas.width(),double(area_.height()) / canvas.height());
             if (viewport != viewport_) {
                 viewport_ = viewport;
-                qInfo("PS3 XMB background: canvas %d,%d %dx%d area %d,%d %dx%d viewport %.4f,%.4f %.4fx%.4f target %dx%d",
+                qInfo("PS3 XMB background: canvas %.0f,%.0f %.0fx%.0f mm, screen %.0f,%.0f %.0fx%.0f mm, viewport %.4f,%.4f %.4fx%.4f, target %dx%d",
                     canvas.x(),canvas.y(),canvas.width(),canvas.height(),area_.x(),area_.y(),area_.width(),area_.height(),
                     viewport.x(),viewport.y(),viewport.width(),viewport.height(),size.width(),size.height());
             }
@@ -285,7 +288,7 @@ private:
     unsigned monthShown_ = 0;
     double hourShown_ = 0;
     bool failed_ = false, glints_ = true;
-    QRect area_;
+    QRectF area_;
     QRectF viewport_;
 };
 }
@@ -345,18 +348,35 @@ void XmbItem::geometryChange(const QRectF& next, const QRectF& previous) {
     areaChanged();
 }
 
-// Desktop rectangle (logical pixels) this item covers: its screen's position plus its place
-// in the window. Wayland does not expose window positions, but a wallpaper window fills its
-// screen, so the screen geometry places it.
-QRect XmbItem::desktopArea() const {
+// This screen's place in the physical desktop (DesktopLayout.h), from every screen's
+// logical geometry and reported size.
+static QRectF physicalScreen(const QScreen* target) {
+    const auto screens = QGuiApplication::screens();
+    std::vector<LayoutScreen> layout;
+    size_t reference = 0, index = screens.size();
+    for (qsizetype i = 0; i < screens.size(); ++i) {
+        layout.push_back({screens[i]->geometry(), screens[i]->physicalSize()});
+        if (screens[i] == QGuiApplication::primaryScreen()) reference = size_t(i);
+        if (screens[i] == target) index = size_t(i);
+    }
+    if (index == size_t(screens.size())) return {};
+    return physicalLayout(layout, reference)[index];
+}
+
+QRectF XmbItem::desktopArea() const {
     std::lock_guard lock(areaMutex_);
     return area_;
 }
 
 void XmbItem::areaChanged() {
-    QRect area(QPoint(),size().toSize());
-    if (auto* w = window(); w && w->screen())
-        area.moveTopLeft(w->screen()->geometry().topLeft() + mapToScene(QPointF()).toPoint());
+    QRectF area;
+    if (auto* w = window(); w && w->screen()) {
+        const auto screen = physicalScreen(w->screen());
+        if (!screen.isEmpty()) {
+            const double p = layoutPitch({w->screen()->geometry(), w->screen()->physicalSize()});
+            area = QRectF(screen.topLeft() + mapToScene(QPointF()) * p,size() * p);
+        }
+    }
     { std::lock_guard lock(areaMutex_); area_ = area; }
     if (simulator_) simulator_->setArea(this, area);
     update();
@@ -365,16 +385,25 @@ void XmbItem::areaChanged() {
 void XmbItem::itemChange(ItemChange change, const ItemChangeData& data) {
     QQuickFramebufferObject::itemChange(change,data);
     if (change != ItemSceneChange) return;
-    QObject::disconnect(screenConnection_);
-    QObject::disconnect(screenGeometryConnection_);
+    for (const auto& connection : layoutConnections_) QObject::disconnect(connection);
+    layoutConnections_.clear();
     if (!data.window) return;
-    const auto watch = [this](QScreen* screen) {
-        QObject::disconnect(screenGeometryConnection_);
-        if (screen) screenGeometryConnection_ = connect(screen,&QScreen::geometryChanged,this,[this] { areaChanged(); });
+    // Any change to the desktop layout (screens added, removed, moved, resized, rescaled)
+    // re-places every screen, so watch them all.
+    const auto watchAll = [this] {
+        for (const auto& connection : screenConnections_) QObject::disconnect(connection);
+        screenConnections_.clear();
+        for (auto* screen : QGuiApplication::screens()) {
+            screenConnections_.push_back(connect(screen,&QScreen::geometryChanged,this,[this] { areaChanged(); }));
+            screenConnections_.push_back(connect(screen,&QScreen::physicalSizeChanged,this,[this] { areaChanged(); }));
+        }
         areaChanged();
     };
-    screenConnection_ = connect(data.window,&QWindow::screenChanged,this,watch);
-    watch(data.window->screen());
+    layoutConnections_.push_back(connect(data.window,&QWindow::screenChanged,this,[this] { areaChanged(); }));
+    layoutConnections_.push_back(connect(qGuiApp,&QGuiApplication::screenAdded,this,watchAll));
+    layoutConnections_.push_back(connect(qGuiApp,&QGuiApplication::screenRemoved,this,watchAll));
+    layoutConnections_.push_back(connect(qGuiApp,&QGuiApplication::primaryScreenChanged,this,[this] { areaChanged(); }));
+    watchAll();
 }
 
 void XmbItem::restart() {

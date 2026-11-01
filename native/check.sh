@@ -7,6 +7,7 @@ build=${MOYOU_BUILD:-$root/build/qt}
 export MOYOU_REFERENCE=$work/reference MOYOU_NATIVE_SHADERS=$work/native-shaders-hdr \
     MOYOU_CPU_CORE=$work/cpu-particles MOYOU_NATIVE_BASELINE=$work/native-verified \
     MOYOU_PREVIEW=$build/moyou-preview MOYOU_ROPE_CHECKPOINT=$build/moyou-rope-checkpoint \
-    MOYOU_SURFACE_CHECKPOINT=$build/moyou-surface-checkpoint
+    MOYOU_SURFACE_CHECKPOINT=$build/moyou-surface-checkpoint \
+    MOYOU_DESKTOP_LAYOUT_TEST=$build/moyou-desktop-layout-test
 cd "$root/native"
 PYTHONPATH=tools exec python3 -m unittest discover -s tests "$@"

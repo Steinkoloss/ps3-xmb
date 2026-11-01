@@ -47,6 +47,20 @@ build/qt/moyou-preview --shaders $W/native-shaders-hdr --reference $W/reference 
   --cpu $W/cpu-particles --spline $W/native-verified/spline/original-ls.bin --preset day
 ```
 
+## Plasma wallpaper
+
+```bash
+native/plasma/install.sh
+```
+
+Installs the firmware-derived data to `~/.local/share/ps3-xmb`, the QML module and the
+`org.ps3xmb.waves` wallpaper (KDE Plasma 6), then pick "PS3 XMB Waves" in Desktop and
+Wallpaper. Screens using it share one simulation and show one scene across the desktop. The
+layout is physical: each screen keeps its real size (from its reported millimetres, 96 dpi if
+unknown), and screens that touch in the display settings touch in the scene, aligned at the
+nearer edge. It follows layout changes live. Give every screen the same wallpaper settings,
+or colours change at the seams.
+
 ## Test
 
 ```bash

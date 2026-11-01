@@ -3,6 +3,7 @@
 #include <QtQml/qqmlregistration.h>
 #include <memory>
 #include <mutex>
+#include <vector>
 
 class XmbSimulator;
 struct XmbChannel;
@@ -48,7 +49,7 @@ public:
     QString error() const { return error_; }
 
     std::shared_ptr<XmbChannel> channel() const;
-    QRect desktopArea() const;   // read by the scene-graph renderer
+    QRectF desktopArea() const;   // physical (mm); read by the scene-graph renderer
     Q_INVOKABLE void fail(const QString& message);
 signals:
     void sourceChanged();
@@ -65,8 +66,8 @@ private:
     void restart();
     void areaChanged();
     mutable std::mutex areaMutex_;
-    QRect area_;
-    QMetaObject::Connection screenConnection_, screenGeometryConnection_;
+    QRectF area_;
+    std::vector<QMetaObject::Connection> layoutConnections_, screenConnections_;
     QString dataDirectory_, preset_, error_;
     int month_ = 0;
     double hour_ = -1;
