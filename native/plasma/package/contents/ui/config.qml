@@ -7,7 +7,7 @@ Kirigami.FormLayout {
     twinFormLayouts: parentLayout
 
     property string cfg_Preset
-    property alias cfg_Month: month.value
+    property int cfg_Month
     property alias cfg_Hour: hour.value
     property alias cfg_Glints: glints.checked
     property alias formLayout: root
@@ -19,11 +19,12 @@ Kirigami.FormLayout {
         currentIndex: Math.max(0, values.indexOf(root.cfg_Preset))
         onActivated: index => root.cfg_Preset = values[index]
     }
-    QQC2.SpinBox {
-        id: month
+    QQC2.ComboBox {
         Kirigami.FormData.label: "Month colour:"
-        from: 0; to: 12
-        textFromValue: value => value === 0 ? "Follow calendar" : Qt.locale().standaloneMonthName(value - 1)
+        // QLocale month names are 1-based; index 0 follows the calendar.
+        model: ["Follow calendar"].concat(Array.from({length: 12}, (_, i) => Qt.locale().standaloneMonthName(i + 1)))
+        currentIndex: Math.max(0, Math.min(12, root.cfg_Month))
+        onActivated: index => root.cfg_Month = index
     }
     QQC2.CheckBox {
         id: glints
