@@ -21,8 +21,8 @@ Kirigami.FormLayout {
     }
     QQC2.ComboBox {
         Kirigami.FormData.label: "Month colour:"
-        // QLocale month names are 1-based; index 0 follows the calendar.
-        model: ["Follow calendar"].concat(Array.from({length: 12}, (_, i) => Qt.locale().standaloneMonthName(i + 1)))
+        // QML Locale month names are 0-based (JS dates); index 0 follows the calendar.
+        model: ["Follow calendar"].concat(Array.from({length: 12}, (_, i) => Qt.locale().standaloneMonthName(i)))
         currentIndex: Math.max(0, Math.min(12, root.cfg_Month))
         onActivated: index => root.cfg_Month = index
     }
