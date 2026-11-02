@@ -72,7 +72,7 @@ if(MOYOU_CPU_DIRECTORY AND MOYOU_SPU_DIRECTORY)
     find_package(Qt6 6.9 COMPONENTS Quick)
     if(Qt6Quick_FOUND)
         qt_add_qml_module(moyou-qml URI PS3Xmb VERSION 1.0 PLUGIN_TARGET moyou-qml
-            OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/qml/PS3Xmb SOURCES plasma/XmbItem.cpp plasma/XmbItem.h)
+            OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/qml/PS3Xmb SOURCES plasma/XmbItem.cpp plasma/XmbItem.h plasma/XmbSettings.cpp plasma/XmbSettings.h)
         target_include_directories(moyou-qml PRIVATE plasma)
         target_link_libraries(moyou-qml PRIVATE Qt6::Quick moyou-scene)
         target_compile_options(moyou-qml PRIVATE ${MOYOU_WARNINGS})

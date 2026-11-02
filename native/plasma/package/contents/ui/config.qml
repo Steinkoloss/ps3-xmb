@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls as QQC2
 import org.kde.kirigami as Kirigami
+import PS3Xmb
 
 Kirigami.FormLayout {
     id: root
@@ -12,6 +13,16 @@ Kirigami.FormLayout {
     property alias cfg_Hour: hour.value
     property alias cfg_Glints: glints.checked
     property alias formLayout: root
+
+    // Show the settings every screen shares (XmbSettings), not this screen's stored copy.
+    Component.onCompleted: {
+        if (!XmbSettings.stored) return
+        cfg_Preset = XmbSettings.preset
+        cfg_Month = XmbSettings.month
+        cfg_Hour = XmbSettings.hour
+        cfg_Glints = XmbSettings.glints
+        cfg_SceneAxis = XmbSettings.sceneAxis
+    }
 
     QQC2.ComboBox {
         Kirigami.FormData.label: "Scene set:"

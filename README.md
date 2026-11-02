@@ -62,8 +62,8 @@ nearer edge. The scene's axis runs along the line through the screen centres, sn
 exactly horizontal or vertical within 20° (setting "Across screens": Automatic, Always level,
 Exact angle), so a slightly offset pair shows a level weave between
 their centres and a clearly diagonal arrangement shows it tilted. It follows layout changes live.
-`moyou-preview --screens "x,y,w,h;…" --screen N` renders one screen of such a layout (mm). Give every screen the same wallpaper settings,
-or colours change at the seams.
+`moyou-preview --screens "x,y,w,h;…" --screen N` renders one screen of such a layout (mm). Settings are shared by all screens
+(`~/.config/ps3-xmb.conf`): applying them in any screen's dialog changes every screen.
 
 ## Test
 
