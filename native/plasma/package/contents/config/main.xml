@@ -17,6 +17,10 @@
       <label>Fixed hour 0-23, or -1 to follow the clock</label>
       <default>-1</default>
     </entry>
+    <entry name="SceneAxis" type="String">
+      <label>Across several screens: auto (level or upright when close), level, or exact (follow the line between screen centres)</label>
+      <default>auto</default>
+    </entry>
     <entry name="Glints" type="Bool">
       <label>Draw the original glint pass</label>
       <default>true</default>

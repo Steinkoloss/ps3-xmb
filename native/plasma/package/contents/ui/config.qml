@@ -8,6 +8,7 @@ Kirigami.FormLayout {
 
     property string cfg_Preset
     property int cfg_Month
+    property string cfg_SceneAxis
     property alias cfg_Hour: hour.value
     property alias cfg_Glints: glints.checked
     property alias formLayout: root
@@ -25,6 +26,17 @@ Kirigami.FormLayout {
         model: ["Follow calendar"].concat(Array.from({length: 12}, (_, i) => Qt.locale().standaloneMonthName(i)))
         currentIndex: Math.max(0, Math.min(12, root.cfg_Month))
         onActivated: index => root.cfg_Month = index
+    }
+    QQC2.ComboBox {
+        Kirigami.FormData.label: "Across screens:"
+        readonly property var values: ["auto", "level", "exact"]
+        model: ["Automatic", "Always level", "Exact angle"]
+        currentIndex: Math.max(0, values.indexOf(root.cfg_SceneAxis))
+        onActivated: index => root.cfg_SceneAxis = values[index]
+        QQC2.ToolTip.visible: hovered
+        QQC2.ToolTip.text: ["The weave follows the line between your screens, snapped level or upright when it is within 20°.",
+                            "The weave is always horizontal.",
+                            "The weave follows the line between your screen centres exactly, even a slight tilt."][currentIndex]
     }
     QQC2.CheckBox {
         id: glints

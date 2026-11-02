@@ -87,6 +87,7 @@ public:
         refresh();
     }
     void setHour(double hour) { hour_ = hour; }
+    void setAxis(SceneAxis axis) { axis_ = axis; refresh(); }
     void fail(const QString& message) {
         std::lock_guard lock(items_);
         for (const auto& [item, state] : subscribers_)
@@ -117,7 +118,7 @@ private:
                 if (!state.area.isEmpty()) areas.push_back(state.area);
             }
         }
-        { std::lock_guard lock(canvasMutex_); scene_ = areas.empty() ? SceneFrame{} : sceneFrame(areas); }
+        { std::lock_guard lock(canvasMutex_); scene_ = areas.empty() ? SceneFrame{} : sceneFrame(areas,axis_); }
         { std::lock_guard lock(control_->mutex); running_ = running; }
         control_->wake.notify_all();
     }
@@ -190,6 +191,7 @@ private:
     bool running_ = false, stop_ = false;
     std::mutex canvasMutex_;
     SceneFrame scene_;
+    std::atomic<SceneAxis> axis_{SceneAxis::Automatic};
     std::atomic<double> hour_{-1};
 };
 
@@ -331,6 +333,13 @@ void XmbItem::setFrameRate(int rate) {
     emit frameRateChanged();
 }
 
+void XmbItem::setSceneAxis(const QString& mode) {
+    if (mode == sceneAxis_) return;
+    sceneAxis_ = mode;
+    if (simulator_) simulator_->setAxis(::sceneAxis(mode));
+    emit sceneAxisChanged();
+}
+
 void XmbItem::setGlints(bool enabled) {
     if (enabled == glints_) return;
     glints_ = enabled;
@@ -420,6 +429,7 @@ void XmbItem::restart() {
     QTimer::singleShot(120000,this,[this] { if (error_.isEmpty()) retryDelay_ = 2; });
     simulator_->subscribe(this,desktopArea(),running_);
     if (hour_ >= 0) simulator_->setHour(hour_);
+    simulator_->setAxis(::sceneAxis(sceneAxis_));
     update();
 }
 

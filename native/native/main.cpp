@@ -96,6 +96,7 @@ int main(int argc, char** argv) {
                        {"width", "Capture width", "pixels", "1920"}, {"height", "Capture height", "pixels", "1080"},
                        {"screens", "Multi-screen desktop: screen rectangles in millimetres (live scene)", "x,y,w,h;x,y,w,h..."},
                        {"screen", "Which of --screens to render, at --width x --height", "index", "0"},
+                       {"scene-axis", "Multi-screen axis: auto (snap within 20 degrees), level or exact", "mode", "auto"},
                        {"viewport", "Show only this part of the width x height canvas (live scene)", "x,y,w,h"},
                        {"sequence", "Also save every Nth update as output-NNNNN.png (live scene)", "count", "0"}});
     parser.process(application);
@@ -141,7 +142,7 @@ int main(int argc, char** argv) {
                     }
                     const auto index = parser.value("screen").toUInt();
                     if (index >= screens.size()) throw std::runtime_error("--screen is out of range");
-                    const auto frame = sceneFrame(screens);
+                    const auto frame = sceneFrame(screens,sceneAxis(parser.value("scene-axis")));
                     corners = frame.corners(screens[index]);
                     sceneCanvas = QSize(int(std::lround(frame.aspect() * 1000)),1000);
                     std::fprintf(stderr,"scene axis %.2f deg, canvas %.0f x %.0f mm\n",frame.angle * 180 / 3.14159265358979,

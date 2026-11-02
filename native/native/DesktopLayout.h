@@ -1,5 +1,6 @@
 #pragma once
 #include <QRect>
+#include <QString>
 #include <QRectF>
 #include <QSizeF>
 #include <array>
@@ -92,7 +93,17 @@ struct SceneFrame {
     }
 };
 
-inline SceneFrame sceneFrame(const std::vector<QRectF>& screens, double snapDegrees = 20) {
+// How the scene axis follows the screens: snapped to level/upright when within 20 degrees,
+// always level, or exactly along the centre line.
+enum class SceneAxis { Automatic, Level, Exact };
+
+inline SceneAxis sceneAxis(const QString& name) {
+    if (name == QLatin1String("level")) return SceneAxis::Level;
+    if (name == QLatin1String("exact")) return SceneAxis::Exact;
+    return SceneAxis::Automatic;
+}
+
+inline SceneFrame sceneFrame(const std::vector<QRectF>& screens, SceneAxis mode = SceneAxis::Automatic, double snapDegrees = 20) {
     SceneFrame frame;
     if (screens.empty()) return frame;
     constexpr double pi = 3.14159265358979323846;
@@ -107,8 +118,11 @@ inline SceneFrame sceneFrame(const std::vector<QRectF>& screens, double snapDegr
     }
     if (xx + yy > 1e-9) angle = 0.5 * std::atan2(2 * xy, xx - yy);   // (-pi/2, pi/2]
     const double snap = snapDegrees * pi / 180;
-    if (std::abs(angle) <= snap) angle = 0;
-    else if (std::abs(angle) >= pi / 2 - snap) angle = pi / 2;
+    if (mode == SceneAxis::Level) angle = 0;
+    else if (mode == SceneAxis::Automatic) {
+        if (std::abs(angle) <= snap) angle = 0;
+        else if (std::abs(angle) >= pi / 2 - snap) angle = pi / 2;
+    }
     frame.angle = angle;
     frame.anchor = mean;
     const double c = std::cos(angle), s = std::sin(angle);

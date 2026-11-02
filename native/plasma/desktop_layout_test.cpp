@@ -78,6 +78,15 @@ int main() {
         expect(near(f.angle, std::atan2(d.y(), d.x())), "diagonal pair follows the centre line");
         expect(near(f.canvas(diagonal[0].center()).y(), 0.5) && near(f.canvas(diagonal[1].center()).y(), 0.5), "both centres on the axis");
     }
+    // Axis modes: level ignores the tilt, exact keeps a small one.
+    {
+        const std::vector<QRectF> screens{QRectF(-84, 83, 527, 296), QRectF(443, 0, 590, 332)};
+        const QPointF d = screens[1].center() - screens[0].center();
+        expect(near(sceneFrame(screens, SceneAxis::Level).angle, 0), "level mode stays level");
+        expect(near(sceneFrame(screens, SceneAxis::Exact).angle, std::atan2(d.y(), d.x())), "exact mode keeps the small tilt");
+        expect(near(sceneFrame({QRectF(0, 0, 590, 332), QRectF(60, 332, 527, 296)}, SceneAxis::Level).angle, 0), "level mode for a stack");
+        expect(sceneAxis("exact") == SceneAxis::Exact && sceneAxis("bogus") == SceneAxis::Automatic, "mode names");
+    }
     // One screen: the canvas is the screen.
     {
         const QRectF screen(10, 20, 527, 296);

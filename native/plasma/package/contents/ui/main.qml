@@ -11,5 +11,6 @@ WallpaperItem {
         month: root.configuration.Month
         hour: root.configuration.Hour
         glints: root.configuration.Glints
+        sceneAxis: root.configuration.SceneAxis
     }
 }

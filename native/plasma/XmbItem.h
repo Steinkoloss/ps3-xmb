@@ -26,6 +26,9 @@ class XmbItem : public QQuickFramebufferObject {
     Q_PROPERTY(int frameRate READ frameRate WRITE setFrameRate NOTIFY frameRateChanged)
     // Original glint pass (particles_second).
     Q_PROPERTY(bool glints READ glints WRITE setGlints NOTIFY glintsChanged)
+    // Multi-screen scene axis: "auto" (snap to level/upright within 20 degrees), "level" or "exact".
+    // One simulation serves every screen, so the last screen to set it decides.
+    Q_PROPERTY(QString sceneAxis READ sceneAxis WRITE setSceneAxis NOTIFY sceneAxisChanged)
     Q_PROPERTY(QString error READ error NOTIFY errorChanged)
 public:
     explicit XmbItem(QQuickItem* parent = nullptr);
@@ -45,6 +48,8 @@ public:
     int frameRate() const { return frameRate_; }
     bool glints() const { return glints_; }
     void setGlints(bool enabled);
+    QString sceneAxis() const { return sceneAxis_; }
+    void setSceneAxis(const QString& mode);
     void setFrameRate(int rate);
     QString error() const { return error_; }
 
@@ -57,6 +62,7 @@ signals:
     void runningChanged();
     void frameRateChanged();
     void glintsChanged();
+    void sceneAxisChanged();
     void errorChanged();
 protected:
     void componentComplete() override;
@@ -74,6 +80,7 @@ private:
     bool running_ = true;
     int frameRate_ = 60;
     bool glints_ = true;
+    QString sceneAxis_ = QStringLiteral("auto");
     int retryDelay_ = 2;
     std::shared_ptr<XmbSimulator> simulator_;
 };
