@@ -4,6 +4,7 @@
 #include "OriginalScene.h"
 #include <QDateTime>
 #include <QDir>
+#include <QFile>
 #include <QOffscreenSurface>
 #include <QOpenGLContext>
 #include <QOpenGLFramebufferObject>
@@ -232,6 +233,14 @@ public:
             gl.glClear(GL_COLOR_BUFFER_BIT);
             gl.glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);
         }
+        // Development: touching $XDG_RUNTIME_DIR/ps3-xmb-dump saves each screen's next frame there.
+        if (drawn) {
+            const QDir runtime(qEnvironmentVariable("XDG_RUNTIME_DIR","/tmp"));
+            if (QFile::exists(runtime.filePath("ps3-xmb-dump"))) {
+                const auto name = runtime.filePath(QString("ps3-xmb-%1x%2.png").arg(size.width()).arg(size.height()));
+                if (!QFile::exists(name)) framebufferObject()->toImage().save(name);
+            }
+        }
         QQuickOpenGLUtils::resetOpenGLState();
     }
 private:
@@ -295,7 +304,11 @@ private:
 };
 }
 
-XmbItem::XmbItem(QQuickItem* parent) : QQuickFramebufferObject(parent) {}
+XmbItem::XmbItem(QQuickItem* parent) : QQuickFramebufferObject(parent) {
+    // The scene graph shows this framebuffer's first row at the top; the original passes render
+    // with OpenGL's bottom-up rows (as the preview's captures read them), so mirror it.
+    setMirrorVertically(true);
+}
 XmbItem::~XmbItem() { if (simulator_) simulator_->unsubscribe(this); }
 
 QQuickFramebufferObject::Renderer* XmbItem::createRenderer() const { return new XmbRenderer; }
@@ -379,6 +392,22 @@ QRectF XmbItem::desktopArea() const {
 
 void XmbItem::areaChanged() {
     QRectF area;
+    // Development: MOYOU_DEBUG_SCREENS="x,y,w,h;..." (mm) with MOYOU_DEBUG_SCREEN=<index> per
+    // process, or the item's objectName "screen<index>", stands in for the desktop layout.
+    if (const auto screens = qEnvironmentVariable("MOYOU_DEBUG_SCREENS"); !screens.isEmpty()) {
+        bool valid = false;
+        auto index = objectName().startsWith("screen") ? objectName().mid(6).toInt(&valid) : -1;
+        if (!valid) index = qEnvironmentVariableIntValue("MOYOU_DEBUG_SCREEN");
+        const auto rects = screens.split(';');
+        if (index >= 0 && index < rects.size()) {
+            const auto f = rects[index].split(',');
+            if (f.size() == 4) area = QRectF(f[0].toDouble(),f[1].toDouble(),f[2].toDouble(),f[3].toDouble());
+        }
+        { std::lock_guard lock(areaMutex_); area_ = area; }
+        if (simulator_) simulator_->setArea(this, area);
+        update();
+        return;
+    }
     if (auto* w = window(); w && w->screen()) {
         const auto screen = physicalScreen(w->screen());
         if (!screen.isEmpty()) {
