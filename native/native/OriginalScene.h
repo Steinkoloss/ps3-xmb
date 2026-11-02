@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include "OriginalSimulation.h"
 
 // The original background, ribbon, composition and glare pass graph.
@@ -12,7 +13,13 @@ public:
     void setGlints(bool enabled) { glints_ = enabled; }
     // Part of the simulated canvas this display shows (top-left origin, 0-1): screens of a
     // multi-monitor desktop each show their slice of one wider scene.
-    void setViewport(QRectF viewport) { viewport_ = viewport; }
+    void setViewport(QRectF viewport) {
+        setScreen({viewport.topLeft(),viewport.topRight(),viewport.bottomRight(),viewport.bottomLeft()},1);
+    }
+    // General form: the screen's corners (top-left, top-right, bottom-right, bottom-left) on the
+    // canvas (0-1, top-left origin) of the given width/height aspect. A rotated screen renders
+    // the corners' bounding box and maps it onto the target.
+    void setScreen(const std::array<QPointF,4>& corners, double canvasAspect) { corners_ = corners; aspect_ = canvasAspect; }
     void show(const OriginalSimulation::Frame& frame, QSize size);
     void render(GLuint target, QSize size) { display_->render(target,size); }
     QImage capture(QSize size);
@@ -27,7 +34,8 @@ private:
     unsigned month_ = 0;
     double hour_ = 0;
     bool glints_ = true;
-    QRectF viewport_{0,0,1,1};
+    std::array<QPointF,4> corners_{QPointF(0,0),QPointF(1,0),QPointF(1,1),QPointF(0,1)};
+    double aspect_ = 1;
     std::unique_ptr<Renderer> display_;
 };
 
@@ -39,6 +47,9 @@ public:
     void advance(double seconds, QSize size);
     // Simulate for the whole canvas, display only the viewport (pixels within the canvas).
     void advance(double seconds, QSize canvas, QRect viewport);
+    // Simulate for a canvas (only its aspect matters) and show one screen of it: corners on the
+    // canvas as OriginalDisplay::setScreen, rendered at the screen's pixel size.
+    void advance(double seconds, QSize canvas, const std::array<QPointF,4>& corners, QSize screen);
     void render(GLuint target, QSize size) { display_.render(target,size); }
     QImage capture(QSize size) { return display_.capture(size); }
     const std::vector<float>& mesh() const { return frame_.vertices; }

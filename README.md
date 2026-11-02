@@ -58,7 +58,10 @@ Installs the firmware-derived data to `~/.local/share/ps3-xmb`, the QML module a
 Wallpaper. Screens using it share one simulation and show one scene across the desktop. The
 layout is physical: each screen keeps its real size (from its reported millimetres, 96 dpi if
 unknown), and screens that touch in the display settings touch in the scene, aligned at the
-nearer edge. It follows layout changes live. Give every screen the same wallpaper settings,
+nearer edge. The scene's axis runs along the line through the screen centres, snapped to
+exactly horizontal or vertical within 20°, so a slightly offset pair shows a level weave between
+their centres and a clearly diagonal arrangement shows it tilted. It follows layout changes live.
+`moyou-preview --screens "x,y,w,h;…" --screen N` renders one screen of such a layout (mm). Give every screen the same wallpaper settings,
 or colours change at the seams.
 
 ## Test

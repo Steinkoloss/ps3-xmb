@@ -81,6 +81,9 @@ Renderer::~Renderer() {
     GLuint buffers[] = {vertices_, indices_, meshVertices_, meshIndices_, particleRecords_, particleCorners_};
     glDeleteBuffers(6, buffers);
     if (croppedQuad_) glDeleteBuffers(1, &croppedQuad_);
+    if (mappedQuad_) glDeleteBuffers(1, &mappedQuad_);
+    if (mappedProgram_) glDeleteProgram(mappedProgram_);
+    destroyTarget(mappedTarget_);
     glDeleteVertexArrays(1, &vertexArray_);
 }
 
@@ -259,6 +262,67 @@ void Renderer::drawMesh() {
 }
 
 void Renderer::render(GLuint destination, QSize size) {
+    if (mappedSize_.isEmpty()) { renderGraph(destination, size); return; }
+    if (mappedTarget_.size != mappedSize_) {
+        destroyTarget(mappedTarget_);
+        mappedTarget_ = createTarget(mappedSize_, GL_RGBA8);
+    }
+    renderGraph(mappedTarget_.framebuffer, mappedSize_);
+    drawMapped(destination, size);
+}
+
+void Renderer::drawMapped(GLuint destination, QSize size) {
+    if (!mappedProgram_) {
+        const char* vertex = "#version 430 core\n"
+            "layout(location=0) in vec2 position; layout(location=1) in vec2 coordinate; out vec2 uv;\n"
+            "void main() { uv = coordinate; gl_Position = vec4(position, 0.0, 1.0); }\n";
+        const char* fragment = "#version 430 core\n"
+            "in vec2 uv; layout(binding=0) uniform sampler2D image; out vec4 colour;\n"
+            "void main() { colour = texture(image, uv); }\n";
+        mappedProgram_ = glCreateProgram();
+        for (const auto& [type, source] : {std::pair{GL_VERTEX_SHADER, vertex}, std::pair{GL_FRAGMENT_SHADER, fragment}}) {
+            const GLuint shader = glCreateShader(type);
+            glShaderSource(shader, 1, &source, nullptr);
+            glCompileShader(shader);
+            GLint ok = 0;
+            glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
+            if (!ok) error("Mapped output shader failed to compile");
+            glAttachShader(mappedProgram_, shader);
+            glDeleteShader(shader);
+        }
+        glLinkProgram(mappedProgram_);
+        GLint ok = 0;
+        glGetProgramiv(mappedProgram_, GL_LINK_STATUS, &ok);
+        if (!ok) error("Mapped output shader failed to link");
+        glGenBuffers(1, &mappedQuad_);
+    }
+    // Corners in fan order; the offscreen texture's row 0 is the image bottom.
+    const std::array<QPointF, 4> positions{QPointF(-1, 1), QPointF(1, 1), QPointF(1, -1), QPointF(-1, -1)};
+    float quad[16];
+    for (unsigned i = 0; i < 4; ++i) {
+        quad[i * 4 + 0] = float(positions[i].x()); quad[i * 4 + 1] = float(positions[i].y());
+        quad[i * 4 + 2] = float(mappedCorners_[i].x()); quad[i * 4 + 3] = float(1 - mappedCorners_[i].y());
+    }
+    glBindVertexArray(vertexArray_);
+    glBindFramebuffer(GL_FRAMEBUFFER, destination);
+    glViewport(0, 0, size.width(), size.height());
+    glDisable(GL_BLEND);
+    glUseProgram(mappedProgram_);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, mappedTarget_.texture);
+    glBindBuffer(GL_ARRAY_BUFFER, mappedQuad_);
+    glBufferData(GL_ARRAY_BUFFER, sizeof quad, quad, GL_STREAM_DRAW);
+    for (GLuint i = 0; i < 16; ++i) glDisableVertexAttribArray(i);
+    glEnableVertexAttribArray(0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), nullptr);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), reinterpret_cast<void*>(2 * sizeof(float)));
+    glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+    glUseProgram(0);
+    if (auto status = glGetError(); status != GL_NO_ERROR) error("Mapped output failed, OpenGL error " + QString::number(status, 16));
+}
+
+void Renderer::renderGraph(GLuint destination, QSize size) {
     // A host scene graph may share this context; establish the state the passes assume.
     while (glGetError() != GL_NO_ERROR) {}
     glDisable(GL_DEPTH_TEST);

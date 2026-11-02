@@ -211,9 +211,34 @@ void OriginalDisplay::show(const OriginalSimulation::Frame& frame, QSize size) {
     if (frame.menus != menus_) applyMenus(frame);
     // A screen showing part of a wider canvas: geometry rasterizes through an offset viewport,
     // the background gradient samples the same sub-rectangle.
-    const bool cropped = viewport_ != QRectF(0,0,1,1);
-    display_->geometryViewport(viewport_);
-    display_->quadRect("background",cropped ? viewport_ : QRectF());
+    const auto& k = corners_;
+    const auto near = [](double a, double b) { return std::abs(a - b) < 1e-9; };
+    const bool upright = near(k[0].y(),k[1].y()) && near(k[0].x(),k[3].x()) && k[1].x() > k[0].x() && k[3].y() > k[0].y();
+    QRectF viewport;
+    if (upright) {
+        viewport = QRectF(k[0],k[2]);
+        display_->mapping({},{});
+    } else {
+        double left = 1e300, top = 1e300, right = -1e300, bottom = -1e300;
+        for (const auto& corner : k) {
+            left = std::min(left,corner.x()); right = std::max(right,corner.x());
+            top = std::min(top,corner.y()); bottom = std::max(bottom,corner.y());
+        }
+        viewport = QRectF(left,top,right - left,bottom - top);
+        // Keep the screen's pixel density: its top edge, in canvas units, spans size.width().
+        const double edge = std::hypot((k[1].x() - k[0].x()) * aspect_,k[1].y() - k[0].y());
+        const double perUnit = size.width() / edge;
+        const QSize source(std::max(1,int(std::lround(viewport.width() * aspect_ * perUnit))),
+                           std::max(1,int(std::lround(viewport.height() * perUnit))));
+        std::array<QPointF,4> mapped;
+        for (unsigned i = 0; i < 4; ++i)
+            mapped[i] = QPointF((k[i].x() - left) / viewport.width(),(k[i].y() - top) / viewport.height());
+        display_->mapping(source,mapped);
+        size = source;
+    }
+    const bool cropped = viewport != QRectF(0,0,1,1);
+    display_->geometryViewport(viewport);
+    display_->quadRect("background",cropped ? viewport : QRectF());
     display_->mesh(frame.vertices);
     for (unsigned i = 0; i < 2; ++i) display_->texture(QString("exposure%1").arg(i),QSize(128,128),frame.exposure[i].data(),true,true);
     display_->texture("noise",QSize(32,32),frame.noise.rgba.data(),false,true);
@@ -264,4 +289,10 @@ void OriginalScene::advance(double seconds, QSize canvas, QRect viewport) {
     display_.setViewport(QRectF(double(viewport.x()) / canvas.width(),double(viewport.y()) / canvas.height(),
         double(viewport.width()) / canvas.width(),double(viewport.height()) / canvas.height()));
     display_.show(frame_,viewport.size());
+}
+
+void OriginalScene::advance(double seconds, QSize canvas, const std::array<QPointF,4>& corners, QSize screen) {
+    frame_ = simulation_.step(seconds,canvas);
+    display_.setScreen(corners,double(canvas.width()) / canvas.height());
+    display_.show(frame_,screen);
 }

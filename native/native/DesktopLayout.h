@@ -2,6 +2,7 @@
 #include <QRect>
 #include <QRectF>
 #include <QSizeF>
+#include <array>
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -65,4 +66,60 @@ inline std::vector<QRectF> physicalLayout(const std::vector<LayoutScreen>& scree
         if (!done[i])
             placed[i] = QRectF(QPointF(screens[i].geometry.topLeft()) * layoutPitch(r), QSizeF(screens[i].geometry.size()) * layoutPitch(screens[i]));
     return placed;
+}
+
+// Where the scene lies on a multi-screen desktop. The scene's horizontal axis runs along the
+// line through the screen centres (their principal axis for three or more), snapped to exactly
+// horizontal or vertical unless it is clearly diagonal, so screens that are only slightly offset
+// show a level scene. The canvas is centred on that axis and covers every screen.
+struct SceneFrame {
+    double angle = 0;      // axis direction in radians, desktop coordinates (y down), (-pi/2, pi/2]
+    QPointF anchor;        // millimetres; a point on the axis (the mean screen centre)
+    double uMin = -0.5, uMax = 0.5;  // canvas extent along the axis, millimetres from anchor
+    double half = 0.5;     // canvas half-height across the axis, millimetres
+
+    double aspect() const { return (uMax - uMin) / (2 * half); }
+    // Canvas coordinates (0-1, top-left origin) of a desktop point in millimetres.
+    QPointF canvas(QPointF point) const {
+        const double c = std::cos(angle), s = std::sin(angle);
+        const QPointF d = point - anchor;
+        const double u = d.x() * c + d.y() * s, v = -d.x() * s + d.y() * c;
+        return {(u - uMin) / (uMax - uMin), (v + half) / (2 * half)};
+    }
+    // A screen's corners on the canvas: top-left, top-right, bottom-right, bottom-left.
+    std::array<QPointF, 4> corners(const QRectF& screen) const {
+        return {canvas(screen.topLeft()), canvas(screen.topRight()), canvas(screen.bottomRight()), canvas(screen.bottomLeft())};
+    }
+};
+
+inline SceneFrame sceneFrame(const std::vector<QRectF>& screens, double snapDegrees = 20) {
+    SceneFrame frame;
+    if (screens.empty()) return frame;
+    constexpr double pi = 3.14159265358979323846;
+    QPointF mean;
+    for (const auto& screen : screens) mean += screen.center();
+    mean /= double(screens.size());
+    double angle = 0;
+    double xx = 0, yy = 0, xy = 0;
+    for (const auto& screen : screens) {
+        const QPointF d = screen.center() - mean;
+        xx += d.x() * d.x(); yy += d.y() * d.y(); xy += d.x() * d.y();
+    }
+    if (xx + yy > 1e-9) angle = 0.5 * std::atan2(2 * xy, xx - yy);   // (-pi/2, pi/2]
+    const double snap = snapDegrees * pi / 180;
+    if (std::abs(angle) <= snap) angle = 0;
+    else if (std::abs(angle) >= pi / 2 - snap) angle = pi / 2;
+    frame.angle = angle;
+    frame.anchor = mean;
+    const double c = std::cos(angle), s = std::sin(angle);
+    double uMin = 1e300, uMax = -1e300, half = 0;
+    for (const auto& screen : screens)
+        for (const QPointF corner : {screen.topLeft(), screen.topRight(), screen.bottomRight(), screen.bottomLeft()}) {
+            const QPointF d = corner - mean;
+            const double u = d.x() * c + d.y() * s, v = -d.x() * s + d.y() * c;
+            uMin = std::min(uMin, u); uMax = std::max(uMax, u);
+            half = std::max(half, std::abs(v));
+        }
+    frame.uMin = uMin; frame.uMax = uMax; frame.half = std::max(half, 1e-6);
+    return frame;
 }

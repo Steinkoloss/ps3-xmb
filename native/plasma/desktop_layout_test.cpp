@@ -57,6 +57,33 @@ int main() {
         const auto r = physicalLayout(screens, 0);
         expect(near(r[1].left(), 5000 * 527.0 / 1920), "detached screen position");
     }
+    // Scene axis: a slightly offset side-by-side pair snaps level, centred between the centres.
+    {
+        const std::vector<QRectF> screens{QRectF(-84, 35, 527, 296), QRectF(443, 0, 590, 332)};
+        const auto f = sceneFrame(screens);
+        expect(near(f.angle, 0), "slightly offset screens snap level");
+        expect(near(f.anchor.y(), (screens[0].center().y() + screens[1].center().y()) / 2), "axis runs between the centres");
+        const auto left = f.corners(screens[0]), right = f.corners(screens[1]);
+        expect(near(left[1].x(), right[0].x()), "touching screens meet on the canvas");
+        for (const auto& corner : {left[0], left[2], right[0], right[2]})
+            expect(corner.x() > -1e-9 && corner.x() < 1 + 1e-9 && corner.y() > -1e-9 && corner.y() < 1 + 1e-9, "screens lie on the canvas");
+    }
+    // A stacked pair a little off to the side snaps vertical; a clear diagonal keeps its angle.
+    {
+        const auto vertical = sceneFrame({QRectF(0, 0, 590, 332), QRectF(60, 332, 527, 296)});
+        expect(near(vertical.angle, 3.14159265358979323846 / 2), "slightly offset stack snaps vertical");
+        const std::vector<QRectF> diagonal{QRectF(0, 0, 527, 296), QRectF(527, 450, 590, 332)};
+        const auto f = sceneFrame(diagonal);
+        const QPointF d = diagonal[1].center() - diagonal[0].center();
+        expect(near(f.angle, std::atan2(d.y(), d.x())), "diagonal pair follows the centre line");
+        expect(near(f.canvas(diagonal[0].center()).y(), 0.5) && near(f.canvas(diagonal[1].center()).y(), 0.5), "both centres on the axis");
+    }
+    // One screen: the canvas is the screen.
+    {
+        const QRectF screen(10, 20, 527, 296);
+        const auto c = sceneFrame({screen}).corners(screen);
+        expect(near(c[0].x(), 0) && near(c[0].y(), 0) && near(c[2].x(), 1) && near(c[2].y(), 1), "single screen fills the canvas");
+    }
     if (!failures) std::printf("desktop layout ok\n");
     return failures ? 1 : 0;
 }

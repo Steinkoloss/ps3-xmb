@@ -30,7 +30,7 @@ struct XmbChannel {
     QString shaders, reference, preset;
     std::optional<OriginalSimulation::Constants> constants;
     std::shared_ptr<const OriginalSimulation::Frame> frame;   // latest; every screen reads it
-    QRectF canvas;   // desktop area (millimetres) the latest frame was simulated for
+    SceneFrame scene;   // where the latest frame lies on the desktop (DesktopLayout.h)
     uint64_t frameId = 0, consumed = 0;
     // Wakes the simulation when a renderer takes a frame.
     std::function<void()> taken;
@@ -108,16 +108,16 @@ private:
         thread_ = std::thread([this, cpu = root_.filePath("cpu"), spline = root_.filePath("spline/original-ls.bin")] { run(cpu,spline); });
     }
     void refresh() {
-        QRectF canvas;
+        std::vector<QRectF> areas;
         bool running = false;
         {
             std::lock_guard lock(items_);
             for (const auto& [item, state] : subscribers_) {
                 running = running || state.running;
-                if (!state.area.isEmpty()) canvas = canvas.united(state.area);
+                if (!state.area.isEmpty()) areas.push_back(state.area);
             }
         }
-        { std::lock_guard lock(canvasMutex_); canvas_ = canvas; }
+        { std::lock_guard lock(canvasMutex_); scene_ = areas.empty() ? SceneFrame{} : sceneFrame(areas); }
         { std::lock_guard lock(control_->mutex); running_ = running; }
         control_->wake.notify_all();
     }
@@ -150,17 +150,16 @@ private:
                 const auto now = Clock::now();
                 const auto seconds = std::min(0.25,std::chrono::duration<double>(now - last).count());
                 last = now;
-                QRectF canvas;
-                { std::lock_guard lock(canvasMutex_); canvas = canvas_; }
-                if (canvas.isEmpty()) canvas = QRectF(0,0,16,9);
+                SceneFrame scene;
+                { std::lock_guard lock(canvasMutex_); scene = scene_; }
                 const double fixed = hour_;
                 simulation.setHour(fixed >= 0 ? fixed : QTime::currentTime().msecsSinceStartOfDay() / 3.6e6);
                 auto frame = std::make_shared<const OriginalSimulation::Frame>(simulation.step(seconds,
-                    QSize(std::max(1,int(std::lround(canvas.width() * 10))),std::max(1,int(std::lround(canvas.height() * 10))))));
+                    QSize(std::max(1,int(std::lround(scene.aspect() * 1000))),1000)));
                 {
                     std::lock_guard lock(channel_->mutex);
                     channel_->frame = std::move(frame);
-                    channel_->canvas = canvas;
+                    channel_->scene = scene;
                     ++channel_->frameId;
                 }
                 updateItems();
@@ -190,7 +189,7 @@ private:
     std::map<XmbItem*, Subscriber> subscribers_;
     bool running_ = false, stop_ = false;
     std::mutex canvasMutex_;
-    QRectF canvas_;
+    SceneFrame scene_;
     std::atomic<double> hour_{-1};
 };
 
@@ -239,7 +238,7 @@ private:
         const unsigned month = month_ > 0 ? unsigned(month_) : unsigned(now.date().month());
         const double hour = hour_ >= 0 ? hour_ : now.time().msecsSinceStartOfDay() / 3.6e6;
         std::shared_ptr<const OriginalSimulation::Frame> frame;
-        QRectF canvas;
+        SceneFrame scene;
         uint64_t id;
         {
             std::lock_guard lock(channel_->mutex);
@@ -249,7 +248,7 @@ private:
                 monthShown_ = month; hourShown_ = hour;
             }
             id = channel_->frameId;
-            if (display_ && id != shown_) { frame = channel_->frame; canvas = channel_->canvas; }
+            if (display_ && id != shown_) { frame = channel_->frame; scene = channel_->scene; }
             channel_->consumed = std::max(channel_->consumed, id);
         }
         if (channel_->taken) channel_->taken();
@@ -261,18 +260,19 @@ private:
         }
         display_->setGlints(glints_);
         if (frame && !frame->vertices.empty()) {
-            // This screen's part of the canvas the frame was simulated for.
-            QRectF viewport(0,0,1,1);
-            if (!canvas.isEmpty() && !area_.isEmpty() && canvas.adjusted(-0.01,-0.01,0.01,0.01).contains(area_))
-                viewport = QRectF(double(area_.x() - canvas.x()) / canvas.width(),double(area_.y() - canvas.y()) / canvas.height(),
-                    double(area_.width()) / canvas.width(),double(area_.height()) / canvas.height());
-            if (viewport != viewport_) {
-                viewport_ = viewport;
-                qInfo("PS3 XMB background: canvas %.0f,%.0f %.0fx%.0f mm, screen %.0f,%.0f %.0fx%.0f mm, viewport %.4f,%.4f %.4fx%.4f, target %dx%d",
-                    canvas.x(),canvas.y(),canvas.width(),canvas.height(),area_.x(),area_.y(),area_.width(),area_.height(),
-                    viewport.x(),viewport.y(),viewport.width(),viewport.height(),size.width(),size.height());
+            // This screen's part of the scene the frame was simulated for.
+            std::array<QPointF,4> corners{QPointF(0,0),QPointF(1,0),QPointF(1,1),QPointF(0,1)};
+            double aspect = double(size.width()) / size.height();
+            if (!area_.isEmpty()) { corners = scene.corners(area_); aspect = scene.aspect(); }
+            if (corners != corners_) {
+                corners_ = corners;
+                qInfo("PS3 XMB background: scene axis %.1f deg, canvas %.0fx%.0f mm; screen %.0f,%.0f %.0fx%.0f mm at "
+                      "(%.3f,%.3f) (%.3f,%.3f) (%.3f,%.3f) (%.3f,%.3f), target %dx%d",
+                    scene.angle * 57.29577951308232,scene.uMax - scene.uMin,2 * scene.half,
+                    area_.x(),area_.y(),area_.width(),area_.height(),corners[0].x(),corners[0].y(),corners[1].x(),corners[1].y(),
+                    corners[2].x(),corners[2].y(),corners[3].x(),corners[3].y(),size.width(),size.height());
             }
-            display_->setViewport(viewport);
+            display_->setScreen(corners,aspect);
             display_->show(*frame,size);
             shown_ = id;
         }
@@ -289,7 +289,7 @@ private:
     double hourShown_ = 0;
     bool failed_ = false, glints_ = true;
     QRectF area_;
-    QRectF viewport_;
+    std::array<QPointF,4> corners_{};
 };
 }
 

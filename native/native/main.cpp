@@ -1,6 +1,8 @@
 #include "Renderer.h"
 #ifdef MOYOU_HAVE_LIVE_SCENE
 #include "OriginalScene.h"
+#include "DesktopLayout.h"
+#include <optional>
 #endif
 #include <QCommandLineParser>
 #include <QGuiApplication>
@@ -92,6 +94,8 @@ int main(int argc, char** argv) {
                        {"frames", "Number of original 60 Hz updates before a capture", "count", "121"},
                        {"mesh-checkpoint", "Save the live 128 x 128 clip-space surface for comparison", "file"},
                        {"width", "Capture width", "pixels", "1920"}, {"height", "Capture height", "pixels", "1080"},
+                       {"screens", "Multi-screen desktop: screen rectangles in millimetres (live scene)", "x,y,w,h;x,y,w,h..."},
+                       {"screen", "Which of --screens to render, at --width x --height", "index", "0"},
                        {"viewport", "Show only this part of the width x height canvas (live scene)", "x,y,w,h"},
                        {"sequence", "Also save every Nth update as output-NNNNN.png (live scene)", "count", "0"}});
     parser.process(application);
@@ -126,10 +130,31 @@ int main(int argc, char** argv) {
                     if (viewport.isEmpty() || !QRect(QPoint(),canvas).contains(viewport)) throw std::runtime_error("Viewport outside the canvas");
                     size = viewport.size();
                 }
-                if (!frames) scene.advance(0,canvas,viewport);
+                std::optional<std::array<QPointF,4>> corners;
+                QSize sceneCanvas = canvas;
+                if (parser.isSet("screens")) {
+                    std::vector<QRectF> screens;
+                    for (const auto& item : parser.value("screens").split(';')) {
+                        const auto f = item.split(',');
+                        if (f.size() != 4) throw std::runtime_error("Invalid --screens rectangle");
+                        screens.emplace_back(f[0].toDouble(),f[1].toDouble(),f[2].toDouble(),f[3].toDouble());
+                    }
+                    const auto index = parser.value("screen").toUInt();
+                    if (index >= screens.size()) throw std::runtime_error("--screen is out of range");
+                    const auto frame = sceneFrame(screens);
+                    corners = frame.corners(screens[index]);
+                    sceneCanvas = QSize(int(std::lround(frame.aspect() * 1000)),1000);
+                    std::fprintf(stderr,"scene axis %.2f deg, canvas %.0f x %.0f mm\n",frame.angle * 180 / 3.14159265358979,
+                        frame.uMax - frame.uMin,2 * frame.half);
+                }
+                const auto step = [&](double seconds) {
+                    if (corners) scene.advance(seconds,sceneCanvas,*corners,size);
+                    else scene.advance(seconds,canvas,viewport);
+                };
+                if (!frames) step(0);
                 const auto every = parser.value("sequence").toUInt();
                 for (unsigned i = 0; i < frames; ++i) {
-                    scene.advance(1.0/60,canvas,viewport);
+                    step(1.0/60);
                     if (every && (i + 1) % every == 0) {
                         auto name = parser.value("output");
                         name.insert(name.lastIndexOf('.'), QString("-%1").arg(i + 1, 5, 10, QChar('0')));

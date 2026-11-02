@@ -4,6 +4,7 @@
 #include <QImage>
 #include <QRectF>
 #include <QSize>
+#include <array>
 #include <map>
 #include <memory>
 
@@ -34,6 +35,11 @@ public:
     // Geometry passes (sheet, particles) rasterize a canvas-sized viewport offset so only this
     // rectangle (top-left origin, 0-1) lands in the target; shaders see unchanged clip space.
     void geometryViewport(QRectF rect) { geometryViewport_ = rect; }
+    // Render the graph at source size offscreen, then draw it into the destination so each
+    // destination corner (top-left, top-right, bottom-right, bottom-left) shows the given
+    // source point (0-1, top-left origin): a rotated slice of a tilted canvas. Empty source
+    // size renders directly.
+    void mapping(QSize source, const std::array<QPointF, 4>& corners) { mappedSize_ = source; mappedCorners_ = corners; }
 private:
     struct Target { GLuint texture=0, framebuffer=0; QSize size; GLenum type=GL_TEXTURE_2D; };
     struct Pass { QString name; QJsonObject specification; std::unique_ptr<GlProgram> program; Target target; };
@@ -42,6 +48,8 @@ private:
     void destroyTarget(Target& target);
     void bindMesh(const QString& path);
     void drawFullscreen(const QRectF* rect = nullptr);
+    void renderGraph(GLuint destination, QSize size);
+    void drawMapped(GLuint destination, QSize size);
     void drawMesh();
     void drawParticles(unsigned bit);
     std::vector<Pass> passes_;
@@ -54,6 +62,10 @@ private:
     GLuint particleRecords_=0, particleCorners_=0, croppedQuad_=0;
     std::map<QString, QRectF> quadRects_;
     QRectF geometryViewport_{0,0,1,1};
+    QSize mappedSize_;
+    std::array<QPointF, 4> mappedCorners_{};
+    Target mappedTarget_;
+    GLuint mappedProgram_=0, mappedQuad_=0;
     unsigned particleMask_=~0u;
     Target readTarget_;
     GLuint readBuffer_=0;
