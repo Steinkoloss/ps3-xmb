@@ -28,7 +28,9 @@ public:
     float time() const;
     uint32_t randomState() const;
     Matrix modelMatrix(Vector position, Vector axis, float angle);
+    Matrix modelMatrixOriginal(Vector position, Vector axis, float angle);
     Matrix multiply(const Matrix& left, const Matrix& right);
+    Matrix multiplyOriginal(const Matrix& left, const Matrix& right);
     std::array<Texture, 2> textures();
     ExposureTables exposure(float exposure, float white, float threshold, float gamma, float dither);
     // Compares native noise with the original exposure update for successive frames.

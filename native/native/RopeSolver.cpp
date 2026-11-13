@@ -109,6 +109,8 @@ void drain(ppu_context* ctx) {
 // The math module's expf, pow, floorf and modf run natively (bit-identical over the live
 // scene: mesh, particle arena and image); MOYOU_LIBM=original runs the firmware's.
 float firmwareSinCos(float x, int which);
+bool verifyNative();
+void reportDifference(const char* name, const void* native, const void* original, size_t bytes);
 bool nativeLibm(const char*) {
     static const bool original = std::getenv("MOYOU_LIBM") && !std::strcmp(std::getenv("MOYOU_LIBM"), "original");
     return !original;
@@ -526,7 +528,43 @@ RopeSolver::Nodes RopeSolver::positions() const {
 float RopeSolver::time() const { return readFloat(object + 0x2c0); }
 uint32_t RopeSolver::randomState() const { return vm_read32(object + 0x2d4); }
 
+// 0x02029cc8 with only position, axis and angle set (the menu copy-back is an identity): the
+// axis normalised with the Cell estimate and one Newton step, the axis-angle rotation of
+// 0x02024228 (_FSin for cosine and sine), then (identity basis | position) · rotation. Every
+// lane operation is in the firmware's order; plain VMX products are fused with -0.
 RopeSolver::Matrix RopeSolver::modelMatrix(Vector position, Vector axis, float angle) {
+    const float x = axis[0], y = axis[1], z = axis[2];
+    const float sum = (x * x + y * y) + (z * z + 0.0f);
+    const float estimate = std::bit_cast<float>(cellRsqrtEstimate(std::bit_cast<uint32_t>(sum), true));
+    const float t = estimate * sum, half = estimate * 0.5f;
+    float inverse = std::fma(std::fma(-estimate, t, 1.0f), half, estimate);
+    if (inverse != inverse) inverse = estimate;
+    const std::array<float, 3> a{x * inverse, y * inverse, z * inverse};
+    const float radians = angle * 0.01745329238474369f;
+    const float c = firmwareSinCos(radians, 1), s = firmwareSinCos(radians, 0), k = 1.0f - c;
+    const std::array<float, 3> ka{k * a[0], k * a[1], k * a[2]}, sa{s * a[0], s * a[1], s * a[2]};
+    const auto P = [&](unsigned i, unsigned j) { return ka[i] * a[j]; };
+    const float R[4][4] = {
+        {c + P(0,0), P(1,0) + sa[2], P(2,0) - sa[1], 0},
+        {P(0,1) - sa[2], P(1,1) + c, P(2,1) + sa[0], 0},
+        {P(0,2) + sa[1], P(1,2) - sa[0], P(2,2) + c, 0},
+        {0, 0, 0, 1}};
+    const float pos[4] = {position[0], position[1], position[2], 1};
+    Matrix native;
+    for (unsigned column = 0; column < 4; ++column)
+        for (unsigned lane = 0; lane < 4; ++lane) {
+            const auto basis = [&](unsigned axisIndex) {
+                return std::fma(R[column][axisIndex], lane == axisIndex ? 1.0f : 0.0f, -0.0f);
+            };
+            native[column * 4 + lane] = std::fma(pos[lane], R[column][3], (basis(0) + basis(1)) + basis(2));
+        }
+    if (!verifyNative()) return native;
+    const auto original = modelMatrixOriginal(position, axis, angle);
+    reportDifference("model matrix", native.data(), original.data(), sizeof native);
+    return native;
+}
+
+RopeSolver::Matrix RopeSolver::modelMatrixOriginal(Vector position, Vector axis, float angle) {
     static constexpr std::array<std::pair<uint32_t, uint32_t>, 13> fields = {{
         {0x1b8,0x274},{0x218,0x278},{0x278,0x27c},{0x2d8,0x280},{0x338,0x284},
         {0x398,0x288},{0x3f8,0x29c},{0x458,0x28c},{0x4b8,0x290},{0x518,0x294},
@@ -551,7 +589,41 @@ RopeSolver::Matrix RopeSolver::modelMatrix(Vector position, Vector axis, float a
     return matrix;
 }
 
+namespace {
+// 0x0202b4f4: matrix (column-major) times vector, as the firmware orders its VMX fused
+// multiply-adds: x1·c1 (+ -0, a plain product), then x0·c0, x2·c2, x3·c3 fused in turn.
+std::array<float, 4> transform(const float* m, const float* v) {
+    std::array<float, 4> r;
+    for (unsigned i = 0; i < 4; ++i) {
+        float t = v[1] * m[4 + i];
+        t = std::fma(v[0], m[i], t);
+        t = std::fma(v[2], m[8 + i], t);
+        r[i] = std::fma(v[3], m[12 + i], t);
+    }
+    return r;
+}
+bool verifyNative() { static const bool verify = std::getenv("MOYOU_VERIFY_NATIVE") != nullptr; return verify; }
+void reportDifference(const char* name, const void* native, const void* original, size_t bytes) {
+    size_t differ = 0;
+    for (size_t i = 0; i < bytes; ++i) differ += static_cast<const uint8_t*>(native)[i] != static_cast<const uint8_t*>(original)[i];
+    if (differ) std::fprintf(stderr, "native %s: %zu bytes differ\n", name, differ);
+}
+}
+
+// 0x0203f290: left · right, each column of right through transform().
 RopeSolver::Matrix RopeSolver::multiply(const Matrix& left, const Matrix& right) {
+    Matrix native;
+    for (unsigned column = 0; column < 4; ++column) {
+        const auto c = transform(left.data(), right.data() + column * 4);
+        std::copy(c.begin(), c.end(), native.begin() + column * 4);
+    }
+    if (!verifyNative()) return native;
+    const auto original = multiplyOriginal(left, right);
+    reportDifference("multiply", native.data(), original.data(), sizeof native);
+    return native;
+}
+
+RopeSolver::Matrix RopeSolver::multiplyOriginal(const Matrix& left, const Matrix& right) {
     constexpr uint32_t destination = 0x01006000, a = destination + 64, b = a + 64;
     for (unsigned i = 0; i < 16; ++i) { writeFloat(a + i * 4, left[i]); writeFloat(b + i * 4, right[i]); }
     auto& cpu = state_->cpu;
