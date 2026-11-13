@@ -8,7 +8,21 @@ import struct
 import zlib
 from dataclasses import dataclass
 
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+import shutil
+import subprocess
+
+try:  # the Python cryptography package when installed, else the openssl command
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms
+except ImportError:
+    Cipher = None
+
+
+class modes:
+    """AES modes as (name, iv) for decrypt()."""
+    @staticmethod
+    def CBC(iv): return ("cbc", bytes(iv))
+    @staticmethod
+    def CTR(nonce): return ("ctr", bytes(nonce))
 
 
 PACKAGE_KEY = bytes.fromhex("A97818BD193A67A16FE83A855E1BE9FB5640938D4DBCB2CB52C5A2F8B02B1031")
@@ -29,8 +43,18 @@ def unpack(data, offset, layout):
 
 
 def decrypt(data, key, mode):
-    cipher = Cipher(algorithms.AES(key), mode).decryptor()
-    return cipher.update(data) + cipher.finalize()
+    name, iv = mode
+    if Cipher is not None:
+        from cryptography.hazmat.primitives.ciphers import modes as cipher_modes
+        cipher = Cipher(algorithms.AES(key), (cipher_modes.CBC if name == "cbc" else cipher_modes.CTR)(iv)).decryptor()
+        return cipher.update(data) + cipher.finalize()
+    if not shutil.which("openssl"):
+        raise ValueError("Decrypting the update needs the openssl command or Python's cryptography package")
+    result = subprocess.run(["openssl", "enc", "-d", f"-aes-{len(key) * 8}-{name}", "-K", key.hex(), "-iv", iv.hex(),
+                             "-nopad"], input=bytes(data), capture_output=True)
+    if result.returncode or len(result.stdout) != len(data):
+        raise ValueError("openssl could not decrypt the update: " + result.stderr.decode(errors="replace").strip())
+    return result.stdout
 
 
 def inflate(data, maximum=MAX_SECTION):

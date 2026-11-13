@@ -7,19 +7,26 @@ recorded video is played back.
 
 ## Install
 
-1. Install the build dependencies (Qt 6.9 or newer):
-   - Arch: `sudo pacman -S --needed base-devel cmake ninja qt6-base qt6-declarative python-cryptography`
-   - Fedora: `sudo dnf install gcc-c++ cmake ninja-build qt6-qtbase-devel qt6-qtdeclarative-devel openssl-devel python3-cryptography`
-   - Debian/Ubuntu (with Qt 6.9+): `sudo apt install build-essential cmake ninja-build qt6-base-dev qt6-declarative-dev libssl-dev python3-cryptography`
-2. Run `./install.sh`.
-3. Right-click the desktop > Desktop and Wallpaper > Wallpaper type: **PS3 XMB Waves**.
+Download `ps3-xmb-installer.run` from the Releases page and run it:
 
-The first run downloads Sony's free PS3 system software update (about 200 MB) from Sony's
-update server, takes the renderer's shaders, parameters and textures out of it into
-`~/.local/share/ps3-xmb` (every file checked by SHA-256) and deletes the download. None of
-Sony's files are part of this repository. It then builds, installs the wallpaper and restarts
-the Plasma shell. Already have `PS3UPDAT.PUP` (4.93)? Use `./install.sh /path/to/PS3UPDAT.PUP`.
-Later runs of `./install.sh` rebuild and reinstall and keep the imported data.
+```bash
+sh ps3-xmb-installer.run
+```
+
+That's it. It needs KDE Plasma 6, `python3` and `openssl` (both preinstalled on most
+desktops). The installer downloads Sony's free PS3 system software update (about 200 MB)
+directly from Sony's update server, takes the renderer's shaders, parameters and textures
+out of it into `~/.local/share/ps3-xmb` (every file checked by SHA-256), deletes the
+download, installs the wallpaper and switches every screen to it. None of Sony's files are
+part of this project. Already have `PS3UPDAT.PUP` (4.93)? `sh ps3-xmb-installer.run
+PS3UPDAT.PUP` uses it instead. Set `PS3_XMB_KEEP_WALLPAPER=1` to install without switching.
+
+### From source
+
+Install the build dependencies (Qt 6.9 or newer), then run `./install.sh` (same options):
+- Arch: `sudo pacman -S --needed base-devel cmake ninja qt6-base qt6-declarative`
+- Fedora: `sudo dnf install gcc-c++ cmake ninja-build qt6-qtbase-devel qt6-qtdeclarative-devel`
+- Debian/Ubuntu: `sudo apt install build-essential cmake ninja-build qt6-base-dev qt6-declarative-dev libgl-dev libopengl-dev`
 
 ### Multiple screens
 

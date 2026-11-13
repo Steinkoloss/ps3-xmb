@@ -32,7 +32,6 @@ endif()
 # The renderer is native code. The private translations of the original programs are only
 # needed to compare against them (MOYOU_VERIFY_NATIVE, *Original paths); without them the
 # build uses no firmware-derived code at all.
-find_package(OpenSSL REQUIRED COMPONENTS Crypto)
 set(MOYOU_CPU_DIRECTORY "" CACHE PATH "Optional: private original CPU translations from lift_rope.py")
 if(MOYOU_CPU_DIRECTORY)
     add_library(moyou-rope STATIC native/RopeSolver.cpp
@@ -47,7 +46,6 @@ else()
     target_include_directories(moyou-rope PRIVATE native)
     target_compile_options(moyou-rope PRIVATE -O2 -ffp-contract=off -fno-fast-math -fwrapv -fno-strict-aliasing -fno-semantic-interposition)
 endif()
-target_link_libraries(moyou-rope PRIVATE OpenSSL::Crypto)
 
 set(MOYOU_SPU_DIRECTORY "" CACHE PATH "Optional: private original SPU translations from lift_simulation.py")
 set(MOYOU_RECOMPILER_DIRECTORY "" CACHE PATH "Pinned ps3recomp runtime headers (with MOYOU_SPU_DIRECTORY)")
@@ -55,6 +53,7 @@ add_library(moyou-surface STATIC native/SurfaceEvaluator.cpp)
 target_compile_options(moyou-surface PRIVATE -ffp-contract=off -fno-fast-math)
 if(MOYOU_SPU_DIRECTORY)
     enable_language(C)
+    find_package(OpenSSL REQUIRED COMPONENTS Crypto)   # the SPU replay checks its images
     add_library(moyou-spu STATIC native/spu_replay.c
         ${MOYOU_SPU_DIRECTORY}/spline/spu_recomp.c ${MOYOU_SPU_DIRECTORY}/particles/spu_recomp.c)
     target_include_directories(moyou-spu PRIVATE native ${MOYOU_SPU_DIRECTORY}

@@ -6,7 +6,7 @@
 #include "GuestMemory.h"
 #endif
 #include "CellEstimate.h"
-#include <openssl/sha.h>
+#include "Sha256.h"
 #include <sys/mman.h>
 #include <bit>
 #include <immintrin.h>
@@ -98,8 +98,8 @@ void load(const std::string& path, uint32_t destination, size_t size, const uint
     std::vector<uint8_t> bytes(size);
     if (!file.read(reinterpret_cast<char*>(bytes.data()), static_cast<std::streamsize>(size)) ||
         file.peek() != std::char_traits<char>::eof()) throw std::runtime_error("Wrong-sized original CPU image: " + path);
-    uint8_t digest[SHA256_DIGEST_LENGTH];
-    if (!SHA256(bytes.data(), bytes.size(), digest) || std::memcmp(digest, expected, sizeof digest))
+    const auto digest = sha256(bytes.data(), bytes.size());
+    if (std::memcmp(digest.data(), expected, digest.size()))
         throw std::runtime_error("Original CPU image failed its integrity check: " + path);
     std::memcpy(vm_base + destination, bytes.data(), bytes.size());
 }
