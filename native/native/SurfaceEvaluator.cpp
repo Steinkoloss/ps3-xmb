@@ -9,6 +9,23 @@
 #include <cstring>
 #include <stdexcept>
 
+#ifndef MOYOU_ORIGINAL_SPU
+// Built without the private SPU translations: the original surface stages are unavailable
+// (the native ones need nothing from the SPU program).
+extern "C" {
+const char* moyou_spu_error(void) { return "Built without the original SPU translations (MOYOU_SPU_DIRECTORY)"; }
+int moyou_spu_open(unsigned, const char*) { return 0; }
+int moyou_spu_publish(void) { return 0; }
+int moyou_spu_attach(void) { return 0; }
+int moyou_spu_call(uint32_t, uint64_t) { return 0; }
+int moyou_spu_write(uint32_t, const void*, size_t) { return 0; }
+int moyou_spu_read(uint32_t, void*, size_t) { return 0; }
+int moyou_spu_set_register(unsigned, const uint32_t*) { return 0; }
+int moyou_spu_get_register(unsigned, uint32_t*) { return 0; }
+uint64_t moyou_spu_instructions(void) { return 0; }
+}
+#endif
+
 namespace {
 void checked(int success) { if (!success) throw std::runtime_error(moyou_spu_error()); }
 void argument(unsigned reg, uint32_t value) {

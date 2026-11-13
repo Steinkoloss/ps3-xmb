@@ -1,6 +1,10 @@
 #include "RopeSolver.h"
+#ifdef MOYOU_ORIGINAL_CPU
 #include "rope_program.h"
 #include "rope_digests.h"
+#else
+#include "GuestMemory.h"
+#endif
 #include "CellEstimate.h"
 #include <openssl/sha.h>
 #include <sys/mman.h>
@@ -14,19 +18,24 @@
 #include <stdexcept>
 #include <vector>
 
+#ifdef MOYOU_ORIGINAL_CPU
 extern void moyou_math_func_00095F60(ppu_context*);
 extern void moyou_math_func_00093F94(ppu_context*);
 extern void moyou_math_func_00093B38(ppu_context*);
 extern void moyou_math_func_00092D34(ppu_context*);
 extern void moyou_math_func_00092E90(ppu_context*);
+#endif
 
 extern "C" {
 uint8_t* vm_base = nullptr;
+uint32_t ppu_vm_size = 0x04000000;
+#ifdef MOYOU_ORIGINAL_CPU
 int vm_inline_ok = 0, vm_inline_st_ok = 0;
-uint32_t ppu_vm_size = 0x04000000, ppu_hle_inject_base = 0;
+uint32_t ppu_hle_inject_base = 0;
 uint32_t g_barrier_sync_watch = 0, g_null_sweep_hi = 0;
 const unsigned char* g_spu_coh_bits = nullptr;
 PPU_THREAD_LOCAL void (*g_trampoline_fn)(void*) = nullptr;
+#endif
 }
 
 namespace {
@@ -97,6 +106,7 @@ void load(const std::string& path, uint32_t destination, size_t size, const uint
 
 float readFloat(uint32_t address) { return std::bit_cast<float>(vm_read32(address)); }
 void writeFloat(uint32_t address, float value) { vm_write32(address, std::bit_cast<uint32_t>(value)); }
+#ifdef MOYOU_ORIGINAL_CPU
 void drain(ppu_context* ctx) {
     unsigned count = 0;
     while (g_trampoline_fn) {
@@ -106,6 +116,10 @@ void drain(ppu_context* ctx) {
         next(ctx);
     }
 }
+#endif
+[[noreturn]] void noOriginal() {
+    throw std::runtime_error("Built without the original translations (MOYOU_CPU_DIRECTORY)");
+}
 // The math module's expf, pow, floorf and modf run natively (bit-identical over the live
 // scene: mesh, particle arena and image); MOYOU_LIBM=original runs the firmware's.
 float firmwareSinCos(float x, int which);
@@ -114,12 +128,17 @@ double firmwarePowInteger(double x, unsigned n);
 float vmaxf(float x, float y);
 float vminf(float x, float y);
 void particleLayerFrame(uint32_t layer);
+#ifdef MOYOU_ORIGINAL_CPU
 bool verifyNative();
+#else
+constexpr bool verifyNative() { return false; }   // nothing to compare with
+#endif
 void reportDifference(const char* name, const void* native, const void* original, size_t bytes);
 bool nativeLibm(const char*) {
     static const bool original = std::getenv("MOYOU_LIBM") && !std::strcmp(std::getenv("MOYOU_LIBM"), "original");
     return !original;
 }
+#ifdef MOYOU_ORIGINAL_CPU
 void firmwareMath(ppu_context* ctx, void (*function)(ppu_context*)) {
     const auto toc = ctx->gpr[2], savedStack = ctx->gpr[1];
     ctx->gpr[2] = 0x006f5558;
@@ -128,6 +147,7 @@ void firmwareMath(ppu_context* ctx, void (*function)(ppu_context*)) {
     ctx->gpr[2] = toc;
     if (ctx->gpr[1] != savedStack) throw std::runtime_error("Original math did not restore its stack");
 }
+#endif
 }
 
 // Inlined into the translations (LTO); the permission check stays on every access.
@@ -158,7 +178,8 @@ extern "C" {
     check(address, 8, true);
     value = __builtin_bswap64(value); std::memcpy(vm_base + address, &value, 8);
 }
-#if __has_include("moyou_rope_dispatch.inc")
+#if !defined(MOYOU_ORIGINAL_CPU)
+#elif __has_include("moyou_rope_dispatch.inc")
 const std::map<uint32_t, void (*)(ppu_context*)> lifted = {
 #include "moyou_rope_dispatch.inc"
 };
@@ -205,6 +226,7 @@ RopeSolver::Matrix inverseMatrix(uint32_t source) {
     return result;
 }
 constexpr uint32_t nativeAllocate = 0x01fe0000;   // fake RSX memory manager method
+#ifdef MOYOU_ORIGINAL_CPU
 void ps3_indirect_call(ppu_context* ctx) {
     if (uint32_t(ctx->ctr) == nativeAllocate) {
         // (result, this, bytes, ..., alignment, ...): a refcounted block handle.
@@ -218,6 +240,7 @@ void ps3_indirect_call(ppu_context* ctx) {
         throw std::runtime_error("Original CPU indirect call leaves the lifted closure: " + std::to_string(uint32_t(ctx->ctr)));
     function->second(ctx);
 }
+#endif
 // Firmware new/delete and heap alloc/free in the particle arena: first fit over freed
 // blocks (coalesced), else the bump cursor.
 std::map<uint32_t, uint32_t> particleBlocks, particleFree;
@@ -259,6 +282,7 @@ void particleRelease(uint64_t address) {
     particleFree[start] = size;
 }
 void createRenderObject(uint32_t renderObject, uint32_t capacity);
+#ifdef MOYOU_ORIGINAL_CPU
 void ps3_indirect_call_to(ppu_context*, uint32_t) { throw std::runtime_error("Unadapted original CPU indirect target"); }
 // One guest thread per context and no sharing: lightweight mutex lock (0x66) / unlock (0x68) succeed.
 void lv2_syscall(ppu_context* ctx) {
@@ -409,12 +433,15 @@ void ps3_hle_call(unsigned nid, ppu_context* ctx) {
     default: throw std::runtime_error("Unadapted original CPU import: " + std::to_string(nid));
     }
 }
+#endif
 }
 
 struct RopeSolver::State {
     // Rope/tone calls and particle calls run on separate threads with separate
     // contexts and stacks; they write disjoint guest memory.
+#ifdef MOYOU_ORIGINAL_CPU
     ppu_context cpu{}, particleCpu{};
+#endif
     State() {
         if (vm_base) throw std::runtime_error("The CPU baseline currently permits one rope instance");
         auto* memory = mmap(nullptr, ppu_vm_size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -428,11 +455,13 @@ struct RopeSolver::State {
                 throw std::runtime_error("Cannot map original CPU memory regions");
             }
         }
+#ifdef MOYOU_ORIGINAL_CPU
         cpu.gpr[1] = stack;
         cpu.gpr[2] = 0x020a7d70;
         cpu.vscr = 0x10000;
         particleCpu = cpu;
         particleCpu.gpr[1] = particleStack;
+#endif
         heapCursor = heapBase;
         // Per-instance state: a restarted simulation must not inherit the previous one.
         particleCursor = particleBase;
@@ -449,7 +478,11 @@ struct RopeSolver::State {
 
 RopeSolver::RopeSolver(const std::string& image, const std::string& math) : state_(std::make_unique<State>()) {
     load(image, imageBase, renderer_image_size, renderer_image_digest);
-    load(math, 0, math_image_size, math_image_digest);
+#ifdef MOYOU_ORIGINAL_CPU
+    load(math, 0, math_image_size, math_image_digest);   // the firmware math module, for the originals
+#else
+    (void)math;
+#endif
     vm_write32(object, deformer);
     for (unsigned i = 0; i < arrayFields.size(); ++i) vm_write32(object + arrayFields[i], arrays + i * arrayBytes);
     vm_write32(object + 0x2c, 19);
@@ -476,7 +509,9 @@ void RopeSolver::reset(unsigned state) {
     for (uint32_t field : {0x14u,0xb4u,0xb8u}) vm_write32(deformer + field, 0);
     vm_write8(deformer + 0xbc, 1);
     vm_write32(object + 0x270, state);
+#ifdef MOYOU_ORIGINAL_CPU
     g_trampoline_fn = nullptr;
+#endif
 }
 
 void RopeSolver::parameter(std::string_view name, float value) {
@@ -662,6 +697,7 @@ void RopeSolver::advance(double seconds) {
     }
 }
 
+#ifdef MOYOU_ORIGINAL_CPU
 void RopeSolver::stepOriginal() {
     auto& cpu = state_->cpu;
     cpu.gpr[3] = object;
@@ -671,7 +707,11 @@ void RopeSolver::stepOriginal() {
     if (cpu.gpr[1] != savedStack || cpu.gpr[2] != 0x020a7d70)
         throw std::runtime_error("Original solver did not restore its calling convention");
 }
+#else
+void RopeSolver::stepOriginal() { noOriginal(); }
+#endif
 
+#ifdef MOYOU_ORIGINAL_CPU
 void RopeSolver::advanceOriginal(double seconds) {
     if (!std::isfinite(seconds) || seconds < 0 || seconds > 1)
         throw std::runtime_error("Invalid original frame interval");
@@ -684,6 +724,9 @@ void RopeSolver::advanceOriginal(double seconds) {
     if (cpu.gpr[1] != savedStack || cpu.gpr[2] != 0x020a7d70)
         throw std::runtime_error("Original frame did not restore its calling convention");
 }
+#else
+void RopeSolver::advanceOriginal(double seconds) { noOriginal(); }
+#endif
 
 RopeSolver::Nodes RopeSolver::positions() const {
     Nodes nodes;
@@ -724,6 +767,7 @@ RopeSolver::Matrix RopeSolver::modelMatrix(Vector position, Vector axis, float a
     return native;
 }
 
+#ifdef MOYOU_ORIGINAL_CPU
 RopeSolver::Matrix RopeSolver::modelMatrixOriginal(Vector position, Vector axis, float angle) {
     static constexpr std::array<std::pair<uint32_t, uint32_t>, 13> fields = {{
         {0x1b8,0x274},{0x218,0x278},{0x278,0x27c},{0x2d8,0x280},{0x338,0x284},
@@ -748,6 +792,9 @@ RopeSolver::Matrix RopeSolver::modelMatrixOriginal(Vector position, Vector axis,
     for (unsigned i = 0; i < matrix.size(); ++i) matrix[i] = readFloat(object + 0x1f0 + i * 4);
     return matrix;
 }
+#else
+RopeSolver::Matrix RopeSolver::modelMatrixOriginal(Vector position, Vector axis, float angle) { noOriginal(); }
+#endif
 
 namespace {
 // 0x0202b4f4: matrix (column-major) times vector, as the firmware orders its VMX fused
@@ -762,7 +809,9 @@ std::array<float, 4> transform(const float* m, const float* v) {
     }
     return r;
 }
+#ifdef MOYOU_ORIGINAL_CPU
 bool verifyNative() { static const bool verify = std::getenv("MOYOU_VERIFY_NATIVE") != nullptr; return verify; }
+#endif
 void reportDifference(const char* name, const void* native, const void* original, size_t bytes) {
     size_t differ = 0;
     for (size_t i = 0; i < bytes; ++i) differ += static_cast<const uint8_t*>(native)[i] != static_cast<const uint8_t*>(original)[i];
@@ -783,6 +832,7 @@ RopeSolver::Matrix RopeSolver::multiply(const Matrix& left, const Matrix& right)
     return native;
 }
 
+#ifdef MOYOU_ORIGINAL_CPU
 RopeSolver::Matrix RopeSolver::multiplyOriginal(const Matrix& left, const Matrix& right) {
     constexpr uint32_t destination = 0x01006000, a = destination + 64, b = a + 64;
     for (unsigned i = 0; i < 16; ++i) { writeFloat(a + i * 4, left[i]); writeFloat(b + i * 4, right[i]); }
@@ -794,6 +844,9 @@ RopeSolver::Matrix RopeSolver::multiplyOriginal(const Matrix& left, const Matrix
     for (unsigned i = 0; i < 16; ++i) matrix[i] = readFloat(destination + i * 4);
     return matrix;
 }
+#else
+RopeSolver::Matrix RopeSolver::multiplyOriginal(const Matrix& left, const Matrix& right) { noOriginal(); }
+#endif
 
 // Render object (adapter for the firmware's particle vertex buffers, 0x0209d8e0): two vertex
 // buffers addressed by token and two submission lists. (C linkage: declared beside the imports.)
@@ -971,6 +1024,7 @@ uint32_t RopeSolver::createParticlesNative(unsigned capacity) {
     return system;
 }
 
+#ifdef MOYOU_ORIGINAL_CPU
 uint32_t RopeSolver::createParticlesOriginal(unsigned capacity) {
     auto& cpu = state_->particleCpu;
     const auto system = particleAllocate(0x1980, 0x80), handles = particleAllocate(16, 16);
@@ -990,6 +1044,9 @@ uint32_t RopeSolver::createParticlesOriginal(unsigned capacity) {
     moyou_rope_func_02060B14(&cpu); drain(&cpu);
     return system;
 }
+#else
+uint32_t RopeSolver::createParticlesOriginal(unsigned capacity) { noOriginal(); }
+#endif
 
 // ParticlesMenu apply (0x020329a4): menu items in registration order 0x02034664 → sys+0x1490.
 void RopeSolver::particleParameters(uint32_t system, const std::map<std::string, float>& menu,
@@ -1098,7 +1155,6 @@ uint32_t RopeSolver::particleLayerNative(uint32_t cameraHandle) {
 }
 
 uint32_t RopeSolver::createParticleLayer(uint32_t system) {
-    auto& cpu = state_->particleCpu;
     // Camera (constructor 0x02024a68): near, far, FOV constants, eye/target/up.
     const auto camera = particleAllocate(0x100, 16), handles = particleAllocate(16, 16);
     vm_write32(camera + 8, 1);
@@ -1109,7 +1165,9 @@ uint32_t RopeSolver::createParticleLayer(uint32_t system) {
     // ParticlesLayer constructor 0x020322b8(this, camera, ...); init attaches the system.
     uint32_t layer;
     if (!verifyNative()) layer = particleLayerNative(handles);
+#ifdef MOYOU_ORIGINAL_CPU
     else {
+        auto& cpu = state_->particleCpu;
         const std::vector<uint8_t> before(vm_base + particleBase, vm_base + particleEnd);
         const auto blocks = particleBlocks, holes = particleFree;
         const auto cursor = particleCursor;
@@ -1128,6 +1186,7 @@ uint32_t RopeSolver::createParticleLayer(uint32_t system) {
         if (native != layer || particleBlocks != originalBlocks || particleFree != originalHoles || particleCursor != originalCursor)
             std::fprintf(stderr, "native particle layer: 1 bytes differ (allocator)\n");
     }
+#endif
     vm_write32(layer + 0x18, system);
     // Animated colour (current +0xd0, from +0xe0, to +0xf0) and intensity (+0x120/+0x124/+0x128)
     // start at 0 and are faded in by the XMB boot animations. Start after the fade-in, at the
@@ -1166,6 +1225,7 @@ unsigned RopeSolver::particleFrame(uint32_t system, uint32_t layer, const std::v
     vm_write32(layer + 0x44, width);
     vm_write32(layer + 0x48, height);
     for (unsigned i = 0; i < 16; ++i) writeFloat(layer + 0x50 + i * 4, columns[i]);
+#ifdef MOYOU_ORIGINAL_CPU
     auto& cpu = state_->particleCpu;
     // Layer frame: native (particleLayerFrame) unless MOYOU_PARTICLE_FRAME=original;
     // MOYOU_VERIFY_NATIVE=1 compares it with the original every frame.
@@ -1218,10 +1278,14 @@ unsigned RopeSolver::particleFrame(uint32_t system, uint32_t layer, const std::v
         if (::randomState != originalRandom)
             std::fprintf(stderr, "native particle frame: 4 bytes differ (random state %u vs %u)\n", ::randomState, originalRandom);
     } else particleLayerFrame(layer);
+#else
+    particleLayerFrame(layer);
+#endif
     ++ticks;
     // 0x02031f44 → 0x0205de2c(system, camera FOV): the field takes the camera's FOV
     // (0x02023ed8 reads camera+0x20; 0.925 on a running XMB), then the PPU update path runs.
     writeFloat(system + 0x1358, readFloat(vm_read32(layer + 0xb0) + 0x20));
+#ifdef MOYOU_ORIGINAL_CPU
     if (std::getenv("MOYOU_PARTICLES") && !std::strcmp(std::getenv("MOYOU_PARTICLES"), "original")) {
         cpu.gpr[3] = system;
         moyou_rope_func_0205DDC8(&cpu); drain(&cpu);   // PPU update path
@@ -1259,6 +1323,9 @@ unsigned RopeSolver::particleFrame(uint32_t system, uint32_t layer, const std::v
         }
         else if (frame % 600 == 0) std::fprintf(stderr, "native particles frame %u: identical\n", frame);
     } else particleUpdate(system);
+#else
+    particleUpdate(system);
+#endif
     return vm_read32(system + 0x16fc);
 }
 
@@ -1322,6 +1389,7 @@ RopeSolver::ParticleUniforms RopeSolver::particleUniforms(uint32_t system) {
     return uniforms;
 }
 
+#ifdef MOYOU_ORIGINAL_CPU
 RopeSolver::ParticleUniforms RopeSolver::particleUniformsOriginal(uint32_t system) {
     auto& cpu = state_->particleCpu;
     // qgl context (unrelocated global 0x34) with one identity modelview and its cached inverse.
@@ -1370,10 +1438,14 @@ RopeSolver::ParticleUniforms RopeSolver::particleUniformsOriginal(uint32_t syste
     uniforms.passes = (vm_read32(system + 0x1484) + 1) & 3;
     return uniforms;
 }
+#else
+RopeSolver::ParticleUniforms RopeSolver::particleUniformsOriginal(uint32_t system) { noOriginal(); }
+#endif
 
 
 uint32_t RopeSolver::guestWord(uint32_t address) const { return vm_read32(address); }
 
+#ifdef MOYOU_ORIGINAL_CPU
 unsigned RopeSolver::checkExp(unsigned samples) {
     auto& cpu = state_->cpu;
     unsigned differences = 0;
@@ -1393,7 +1465,11 @@ unsigned RopeSolver::checkExp(unsigned samples) {
     }
     return differences;
 }
+#else
+unsigned RopeSolver::checkExp(unsigned samples) { noOriginal(); }
+#endif
 
+#ifdef MOYOU_ORIGINAL_CPU
 unsigned RopeSolver::checkSinCos(unsigned samples) {
     // Native _FSin against the math module's for random bit patterns plus edge cases.
     auto& cpu = state_->cpu;
@@ -1419,6 +1495,9 @@ unsigned RopeSolver::checkSinCos(unsigned samples) {
     }
     return differences;
 }
+#else
+unsigned RopeSolver::checkSinCos(unsigned samples) { noOriginal(); }
+#endif
 
 namespace {
 // Clip coordinates of a point (column-major matrix) and the cursor falloff at its screen position.
@@ -1527,6 +1606,7 @@ std::array<RopeSolver::Texture, 2> RopeSolver::textures() {
     return native;
 }
 
+#ifdef MOYOU_ORIGINAL_CPU
 std::array<RopeSolver::Texture, 2> RopeSolver::texturesOriginal() {
     heapCursor = heapBase;
     capturedTextures.clear();
@@ -1543,6 +1623,9 @@ std::array<RopeSolver::Texture, 2> RopeSolver::texturesOriginal() {
         throw std::runtime_error("Original texture generator did not upload both LUTs");
     return {capturedTextures.at(0x2001),capturedTextures.at(0x2002)};
 }
+#else
+std::array<RopeSolver::Texture, 2> RopeSolver::texturesOriginal() { noOriginal(); }
+#endif
 
 // Dither noise of the original exposure update 0x02071794 (loop at 0x02071ba4): the
 // same RNG word (tone+0x150), hash, single-precision steps and byte packing.
@@ -1655,6 +1738,7 @@ RopeSolver::ExposureTables RopeSolver::exposure(float value, float white, float 
     return tables;
 }
 
+#ifdef MOYOU_ORIGINAL_CPU
 RopeSolver::ExposureTables RopeSolver::exposureOriginal(float value, float white, float threshold, float gamma, float dither) {
     writeFloat(toneObject + 0x29c, value);
     writeFloat(toneObject + 0x2a0, white);
@@ -1696,7 +1780,11 @@ RopeSolver::ExposureTables RopeSolver::exposureOriginal(float value, float white
     tables.noise = {32,32,std::vector<uint8_t>(vm_base + address, vm_base + address + 32 * 32 * 4)};
     return tables;
 }
+#else
+RopeSolver::ExposureTables RopeSolver::exposureOriginal(float value, float white, float threshold, float gamma, float dither) { noOriginal(); }
+#endif
 
+#ifdef MOYOU_ORIGINAL_CPU
 bool RopeSolver::checkExposureNoise(unsigned frames) {
     for (unsigned frame = 0; frame < frames; ++frame) {
         const auto saved = vm_read32(toneObject + 0x150);
@@ -1708,6 +1796,9 @@ bool RopeSolver::checkExposureNoise(unsigned frames) {
     }
     return true;
 }
+#else
+bool RopeSolver::checkExposureNoise(unsigned frames) { noOriginal(); }
+#endif
 
 RopeSolver::GlareWeights RopeSolver::glareWeights(Vector radii, float sumPower, float level) {
     for (unsigned channel = 0; channel < 3; ++channel) {
@@ -1736,6 +1827,7 @@ RopeSolver::GlareWeights RopeSolver::glareWeights(Vector radii, float sumPower, 
         for (int32_t t = 0; t < count; ++t) weights[channel][t] = weights[channel][t] / sum;
         for (int32_t tap = 0; tap <= radius[channel]; ++tap) result.taps[tap][channel] = weights[channel][radius[channel] + tap];
     }
+#ifdef MOYOU_ORIGINAL_CPU
     if (verifyNative()) {
         auto& cpu = state_->cpu;
         cpu.gpr[3] = toneObject;
@@ -1749,17 +1841,27 @@ RopeSolver::GlareWeights RopeSolver::glareWeights(Vector radii, float sumPower, 
         }
     }
     auto& cpu = state_->cpu;
+#else
+    struct { double fpr[3]; } cpu{};
+#endif
     float sum = 0;
     for (unsigned i = 0; i < 6; ++i) {
         cpu.fpr[1] = sumPower; cpu.fpr[2] = i;
         if (nativeLibm("pow")) {
             const double native = firmwarePowInteger(double(sumPower), i);
+#ifdef MOYOU_ORIGINAL_CPU
             if (verifyNative()) {
                 firmwareMath(&cpu,moyou_math_func_00093F94);
                 reportDifference("glare level pow", &native, &cpu.fpr[1], sizeof native);
             }
+#endif
             cpu.fpr[1] = native;
-        } else firmwareMath(&cpu,moyou_math_func_00093F94);
+        }
+#ifdef MOYOU_ORIGINAL_CPU
+        else firmwareMath(&cpu,moyou_math_func_00093F94);
+#else
+        else noOriginal();
+#endif
         result.levels[i] = static_cast<float>(cpu.fpr[1]);
         sum = static_cast<float>(double(sum) + cpu.fpr[1]);
     }
@@ -2306,6 +2408,7 @@ void particleEmit(uint32_t layer) {
 // exact, as in the translation; sine/cosine is a port of the math module's (firmwareSinCos).
 // MOYOU_PARTICLES=original runs the translated loop; MOYOU_VERIFY_NATIVE=1 runs both and
 // compares the particle arena byte for byte.
+#ifdef MOYOU_ORIGINAL_CPU
 extern void moyou_rope_func_0205CA80(ppu_context*);
 extern void moyou_rope_func_0205CAD0(ppu_context*);
 extern void moyou_rope_func_0205CA00(ppu_context*);
@@ -2314,6 +2417,7 @@ extern void moyou_rope_func_0205C988(ppu_context*);
 extern void moyou_rope_func_0205C9C8(ppu_context*);
 extern void moyou_rope_func_0205C8D4(ppu_context*);
 extern void moyou_rope_func_02087B50(ppu_context*);
+#endif
 
 namespace {
 struct Lanes { float v[4]; float& operator[](int i) { return v[i]; } float operator[](int i) const { return v[i]; } };
