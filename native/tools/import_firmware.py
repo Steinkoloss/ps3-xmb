@@ -24,7 +24,10 @@ from qrc import resources
 from sce import application_elf, package_sections, region, unpack
 
 
+# The update the inputs were verified against. Another update is accepted when every file
+# taken from it matches firmware_inputs.json (the renderer has not changed since).
 PUP_SHA256 = "158471fd834f8ea8036136b6aab43cd86c7ba73d79ca30e0af3c0fe0001cf365"
+EXPECTED_INPUTS = json.loads((Path(__file__).resolve().parent / "firmware_inputs.json").read_text())["files"]
 RENDERER_SHA256 = "63cdee01a142bd4b4cf565da7a866513bc94e5f58e5bf2ece5b630007c3aa088"
 SPLINE_SHA256 = "587f66dc18f88b6090db30bbbf8a54d569a9e2815271beeefd3b44b6b2f84eaa"
 PARTICLES_SHA256 = "7861469441ff1d338ad503eeaa450faeb70c42f8f59764bcbbdeb24187061ea1"
@@ -39,8 +42,6 @@ def digest(data):
 
 
 def update_archive(data):
-    if digest(data) != PUP_SHA256:
-        raise ValueError("Firmware is not the verified, unmodified Sony 4.93 update")
     if data[:8] != b"SCEUF\0\0\0":
         raise ValueError("Invalid PUP magic")
     _, _, count, header_size, data_size = unpack(data, 8, ">5Q")
@@ -90,6 +91,10 @@ def renderer_inputs(pup):
             raise ValueError(f"Original simulation program does not match: {name}")
     if len(found) != 162:
         raise ValueError("Original renderer input inventory is incomplete")
+    for name, content in found.items():
+        expected = EXPECTED_INPUTS.get(name)
+        if not expected or expected["sha256"] != digest(content) or expected["size"] != len(content):
+            raise ValueError(f"This update's renderer differs from the verified 4.93 one ({name})")
     return found
 
 
@@ -97,11 +102,13 @@ def write_reference(pup_path, output):
     output = output.resolve()
     if output.exists():
         raise FileExistsError("Output already exists; use a new directory to preserve the reference")
-    inputs = renderer_inputs(pup_path.read_bytes())
+    pup = pup_path.read_bytes()
+    inputs = renderer_inputs(pup)
     manifest = {
         "schema": "moyou.original-inputs.v1",
         "firmware": "4.93 CEX",
-        "firmware_sha256": PUP_SHA256,
+        "firmware_sha256": PUP_SHA256,          # content identical to this update's
+        "source_sha256": digest(pup),
         "source": "https://www.playstation.com/en-us/support/hardware/ps3/system-software/",
         "files": {name: {"size": len(content), "sha256": digest(content)}
                   for name, content in sorted(inputs.items())},

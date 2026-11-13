@@ -1,0 +1,654 @@
+{
+ "files": {
+  "custom_render_plugin.elf": {
+   "sha256": "63cdee01a142bd4b4cf565da7a866513bc94e5f58e5bf2ece5b630007c3aa088",
+   "size": 915704
+  },
+  "lines/BACKGROUND.mnu": {
+   "sha256": "aa0d76f7bdef8b1093bb70557a7378c98d26d07dc6198c48fcf32077d2c6b688",
+   "size": 285
+  },
+  "lines/HDR.mnu": {
+   "sha256": "178296f619280db5eaebc82343e0a2ab950f6aaa21609347d4ce8d4269c9498c",
+   "size": 348
+  },
+  "lines/LINE1.mnu": {
+   "sha256": "14cac92ca387c02c2d319b49cde9ebf9150c69299bb5f438cd8343c0b3d96e38",
+   "size": 798
+  },
+  "lines/PARTICLES.mnu": {
+   "sha256": "a6de1cf65f618faa7b637bca332da99d3de260808e64258710e09c3f6e6207be",
+   "size": 1294
+  },
+  "lines/PARTICLES_SPE.mnu": {
+   "sha256": "9cd14173438fbef8cb85441c7812d08bf3ddfcd8950a4b57a699fc1724d985a0",
+   "size": 147
+  },
+  "lines/PARTICLES_UI.mnu": {
+   "sha256": "8be7d835b94299de0cdf6c03798acc41e2e9c9fca1a9c87f98cc259d7c8deb7e",
+   "size": 381
+  },
+  "lines/lib/devgui/DebugGui.fpo": {
+   "sha256": "2fcfcb02a0d39c50308473cf3b22d7327e50b08fac674a4ae89fbef00aab2b6c",
+   "size": 352
+  },
+  "lines/lib/devgui/DebugGui.vpo": {
+   "sha256": "4b267c1cd4dc65ccc2d66017044eaa7c42628a9096c3c75da8849d6450eb014b",
+   "size": 992
+  },
+  "lines/lib/glutils/AccGlare.fpo": {
+   "sha256": "a9f4457d3db2f07b2c3319cf23161c0e73536ecc4c903b6991da9e33577874f8",
+   "size": 368
+  },
+  "lines/lib/glutils/ApplyDisplay.fpo": {
+   "sha256": "2aa0d6a3844ea5d1d08784b249610d5fc8504874213a5f9b91f3858a8526c97e",
+   "size": 784
+  },
+  "lines/lib/glutils/ApplyGlare.fpo": {
+   "sha256": "4f72cd3438961b3ce3ae1be549ff9ef1fedb9916b0a924399edb4086bf7a3e96",
+   "size": 976
+  },
+  "lines/lib/glutils/BloomCone.fpo": {
+   "sha256": "23daa206fd350a80c48c42d03509e534e2e97ba0b524d47a7444e9c713d69df2",
+   "size": 720
+  },
+  "lines/lib/glutils/BloomDecay.fpo": {
+   "sha256": "6b30e38ba0941246d397e24efe0352a6be96ddb2a0d1ca485c1455a61997d8d4",
+   "size": 400
+  },
+  "lines/lib/glutils/BlurAcc.fpo": {
+   "sha256": "68b17dcdc824f1a91c1432d22fbfe8774ffdef27f025e733841a2803f8d71b67",
+   "size": 560
+  },
+  "lines/lib/glutils/BlurOutput.fpo": {
+   "sha256": "4a09d310e03d46605313efd8c8a36c51eac455f24d35562a0e5f9ada9ab6984c",
+   "size": 1120
+  },
+  "lines/lib/glutils/BlurOutputFG.fpo": {
+   "sha256": "26e4c4221b13d98f5027d755770452f88e99e868877caf373b8742aeb0567c45",
+   "size": 992
+  },
+  "lines/lib/glutils/ConeFilter.fpo": {
+   "sha256": "42b898bc1470fb7b4492c3c811bbc6a28ffbd55ad4d0174effe585c75da1c0f3",
+   "size": 1360
+  },
+  "lines/lib/glutils/CookieCutter.fpo": {
+   "sha256": "11345bac57978a138789cda979c71d3820115d96b6fb71b9bc5674dc0c282d2c",
+   "size": 400
+  },
+  "lines/lib/glutils/CookieCutter.vpo": {
+   "sha256": "6ec5a97ff9c128d961bfb30261a254a571035da727af0f04794b9973101071a0",
+   "size": 704
+  },
+  "lines/lib/glutils/Copy.fpo": {
+   "sha256": "14ece839e14abc2c302bfe6ecbad5955a7caa4a9b7a894435fd82d82cf961093",
+   "size": 272
+  },
+  "lines/lib/glutils/CopyMRT.fpo": {
+   "sha256": "9a5e3c7bfe708f209dbc7e6a60e17c43d1b3f49d7a435b08d24e12a8c231ace5",
+   "size": 416
+  },
+  "lines/lib/glutils/CopyVarAlpha.fpo": {
+   "sha256": "bf746489a386cd38b52629b758af21ce000ec39823c6b7f950ad8b7f6bf03b8d",
+   "size": 368
+  },
+  "lines/lib/glutils/DoubleGaussian.fpo": {
+   "sha256": "7288e974421f2e57d32ade940bd3458232961591cff6dd0fbbaca96116e0ad38",
+   "size": 2576
+  },
+  "lines/lib/glutils/GaussBloomAndBlur.fpo": {
+   "sha256": "1237b261453124b063d4cab25250ce8ac07f3b166c8a2f4ee4709833a4823078",
+   "size": 4448
+  },
+  "lines/lib/glutils/Gaussian.fpo": {
+   "sha256": "142fc222123cd32ea9441d45577eaa0dd4011a66e629a67d018bfd641593fa62",
+   "size": 2192
+  },
+  "lines/lib/glutils/Gaussian.vpo": {
+   "sha256": "c61634b44c7ac9309c06ab3dcb38f121dd5930f43738cffe62e2ef73af77c445",
+   "size": 1552
+  },
+  "lines/lib/glutils/GlareSource.fpo": {
+   "sha256": "cdc63c8afb5444c4c3c52c142dfac08a8bf7d0e97ae0fcca4073a983c176fe70",
+   "size": 688
+  },
+  "lines/lib/glutils/GlareSourceMRT.fpo": {
+   "sha256": "dfdffd7a567dc1e6850722f90038d1e75984e891eb32d09cad0e67cbd18bb8b0",
+   "size": 1120
+  },
+  "lines/lib/glutils/GlareSourceNoTone.fpo": {
+   "sha256": "4270011bf5dafc0e5573dbe8fe45edfac99ff3b4b54f28e8560a16befe105f32",
+   "size": 464
+  },
+  "lines/lib/glutils/GlareSourcePre.fpo": {
+   "sha256": "79d406aa187179ddaa49e6f6736215114fe9d92d0c469a259dcc99f8fa650fad",
+   "size": 1216
+  },
+  "lines/lib/glutils/ScreenCopy.fpo": {
+   "sha256": "c52aae327536f0f922628a7ef1ee4ffadfb97dee962b299610de183c65ca20e3",
+   "size": 784
+  },
+  "lines/lib/glutils/ToneApplyDisplay.fpo": {
+   "sha256": "6a0c43e65ba786105077405419d509338439032a9798b5f123e61908f35a6e90",
+   "size": 1328
+  },
+  "lines/lib/glutils/ToneApplyDisplayMRT.fpo": {
+   "sha256": "5aabf901dac3111c1149bbe665fdd3abc1996a91a7443d8b113b3c1084d819b2",
+   "size": 1136
+  },
+  "lines/lib/glutils/ToneMap.fpo": {
+   "sha256": "7d8165a608d19235cda741c23cf2151a2da4f08ed35a3ad0ee0d196537786bd1",
+   "size": 688
+  },
+  "lines/lib/glutils/ToneMerge.fpo": {
+   "sha256": "f3a988127fcbf30867b043e1f044b75399d758ba8aefb25274dc9f69aecf7e63",
+   "size": 496
+  },
+  "lines/lib/glutils/ToneSplit.fpo": {
+   "sha256": "a4f24b3c085344fb1659f3ebee0371f32d7b26fab517418a7e0dec4813640b9e",
+   "size": 576
+  },
+  "lines/lib/moyou/LinesController.fpo": {
+   "sha256": "b719bbb885e22f08d2fe727a038b8a853f62998be281da415def0b652cc76a69",
+   "size": 1760
+  },
+  "lines/lib/moyou/LinesController.vpo": {
+   "sha256": "e4f00731df8b03fed8be2b868489e29b393c8ff48dc6e507ca40af81f87aaeb1",
+   "size": 1232
+  },
+  "lines/lib/moyou/LinesControllerQuin.fpo": {
+   "sha256": "915d34e97c4f0b264c970fdf4e5742c7150abf36dc70d13a0a044215b9cd3aa4",
+   "size": 1984
+  },
+  "lines/lib/moyou/LinesEdge.fpo": {
+   "sha256": "761804d4a0c053b6979141a106059b7091b12fd135d93fb245e6cfaad32dce10",
+   "size": 1728
+  },
+  "lines/lib/moyou/back_colours0.fpo": {
+   "sha256": "3d47ad8cee90d7a3e7c521883ad6ff860506b67380efec601dccf452c0b9ee69",
+   "size": 9728
+  },
+  "lines/lib/moyou/back_colours1.fpo": {
+   "sha256": "9937c8c271ed2e62823d99f4062cdddaff2176ca68459cddfefd760f39db743c",
+   "size": 2304
+  },
+  "lines/lib/moyou/back_colours2.fpo": {
+   "sha256": "094186c46598edad5ae4d79aa642091a21fe556dd635b469b4c6f8da84986fd1",
+   "size": 1056
+  },
+  "lines/lib/moyou/back_colours_cpy.fpo": {
+   "sha256": "93513cd7c4f9675e6f091c4b35d45cecbc560a6f828be59c6f96ab3148f8cdb6",
+   "size": 256
+  },
+  "lines/lib/moyou/background.fpo": {
+   "sha256": "44542bb26916efa8f1d90ceadf4d3c8aa8c08c20600fea63f2ef20222bcd5bf8",
+   "size": 432
+  },
+  "lines/lib/moyou/background.vpo": {
+   "sha256": "bc13e08e3fc77f2c6575a8198b20cb2d804ca6e8d96780a64d4323c10d964015",
+   "size": 912
+  },
+  "lines/lib/moyou/bg_copy.fpo": {
+   "sha256": "41d962ea347cfd4cc87fad94f82f9b1eadc3f354e80ccb80ec6ea47c9239c3cf",
+   "size": 736
+  },
+  "lines/lib/moyou/ffd_alpha_blend.fpo": {
+   "sha256": "c431f3f782ce725c194212af7403452faeefac235d6d83583fc1d691a887bd37",
+   "size": 464
+  },
+  "lines/lib/moyou/ffd_shader0.fpo": {
+   "sha256": "714eb86ff24603839f5785ba8e96043541938ede4a6f4388300398d92f7e0e10",
+   "size": 1360
+  },
+  "lines/lib/moyou/ffd_shader1.fpo": {
+   "sha256": "394e279d1c4850bf8ccb36c58edd74b76274ebefa71a270dfa4433e16cf6b5ff",
+   "size": 1392
+  },
+  "lines/lib/moyou/ffd_shader2.fpo": {
+   "sha256": "69150bccbc984fb22f92e318815e365bb0190d47a2c7ba926282a588ce6007cf",
+   "size": 1008
+  },
+  "lines/lib/moyou/ffd_shader3.fpo": {
+   "sha256": "1aec7018889beab61121ccf20754e43954cadf182550511df84f282644ef6236",
+   "size": 1024
+  },
+  "lines/lib/moyou/lines0.fpo": {
+   "sha256": "e113c2fc51428e7b631c43e4dd84d974a9aec8a1bfcc382d8cdff369b3d37fb0",
+   "size": 512
+  },
+  "lines/lib/moyou/lines0.vpo": {
+   "sha256": "8f0cefd1654433522255c49596c42ee1c64188f4f053ed345e7d95bceafd7608",
+   "size": 1296
+  },
+  "lines/lib/moyou/lines1.fpo": {
+   "sha256": "2a4e0e9d7a2c05faaf27f00900f34d673f0cdbe8c1d1341ec66a0a81d9bcacb6",
+   "size": 1088
+  },
+  "lines/lib/moyou/lines1.vpo": {
+   "sha256": "2cc788c5158d55902d2c501fc3e737c93b48d1849b53e541ef35745020a9f8d5",
+   "size": 1840
+  },
+  "lines/lib/moyou/lines2.fpo": {
+   "sha256": "a1b68b81a1965edd0e40e23a0ce23e7ffb53aa6582b1632bc69483b8a03fa731",
+   "size": 880
+  },
+  "lines/lib/moyou/lines2.vpo": {
+   "sha256": "9bd541a1dbee8d662e3089f50dd64dfb5d4f2c8c91c051b75cdbe119bf3f51a2",
+   "size": 1744
+  },
+  "lines/lib/particles/particles_quads.fpo": {
+   "sha256": "34be0a26f8f0d11c5f7e68dd96c8b12da6b402fe684e91d0af84953c8c16dcdc",
+   "size": 3584
+  },
+  "lines/lib/particles/particles_quads.vpo": {
+   "sha256": "591ee15c117952d7cdb522c07613753d9066672e5e243f4e994850eba97543ed",
+   "size": 5296
+  },
+  "lines/lib/particles/particles_quads_debug.fpo": {
+   "sha256": "31b0f73eab65666cd20976200df1e8d3fc21cbd6b0c5ec6f6fcd910f353aa546",
+   "size": 2160
+  },
+  "lines/lib/particles/particles_quads_debug.vpo": {
+   "sha256": "5140ccb224e74de2149e68cceec3f6004fd609cf661c817ca37ebbd683d5f742",
+   "size": 4992
+  },
+  "lines/lib/particles/particles_second.fpo": {
+   "sha256": "9fdaa056fac882a2e4200543639576beda01daf3ccc1a5446c821d4cace7e86d",
+   "size": 3152
+  },
+  "lines/lib/particles/particles_second.vpo": {
+   "sha256": "ec2097c7aeb9aea27ff39505113b32bc4b33308f146c1b324daea0987b33b85e",
+   "size": 5376
+  },
+  "lines/override/black/BACKGROUND.mnu": {
+   "sha256": "815db867806e8f0bf9c555e792a3094bb51b8c5dbb814169668dbef1b8a744d5",
+   "size": 245
+  },
+  "lines/override/black/HDR.mnu": {
+   "sha256": "c8b77fe720b0b67db8c181fb4d18dd68443e9f41bae4784fd606f440fadbbc99",
+   "size": 329
+  },
+  "lines/override/black/LINE1.mnu": {
+   "sha256": "57bd38d1963bf8778fc12df47430a16dc964acf5546cf2945d80cd4f279a97ee",
+   "size": 792
+  },
+  "lines/override/black/PARTICLES.mnu": {
+   "sha256": "7a344793a673dda2757098281f5c29764e5aa55b6bda2d6a846936772f9e2da3",
+   "size": 1294
+  },
+  "lines/override/bright/BACKGROUND.mnu": {
+   "sha256": "26b1a38e3d52d3889336aecad9c725cb6a47d49fe2334aad65fbab3ef0ee2a90",
+   "size": 287
+  },
+  "lines/override/bright/HDR.mnu": {
+   "sha256": "6b671444dd41b11a9bc2eba4bf58740e6df53e684617973da2c92d98e5eaa5ad",
+   "size": 351
+  },
+  "lines/override/bright/LINE1.mnu": {
+   "sha256": "4b1f60218383cf800ee83185bf914a1e928c934fca363450705a461eff856c05",
+   "size": 792
+  },
+  "lines/override/coldboot1/BACKGROUND.mnu": {
+   "sha256": "a6d3b39f31461218cbc28e082a9ad3aaf0f82c174c31766b71de08f55ddf5187",
+   "size": 466
+  },
+  "lines/override/coldboot1/HDR.mnu": {
+   "sha256": "12b512f1176d74521b9fec3c0b6187de40ce0fc97d87f5d4005186ca436b9053",
+   "size": 335
+  },
+  "lines/override/coldboot1/LINE1.mnu": {
+   "sha256": "9600a788858ce12650e356368e20e82081a5e36eb193df597475ccc8c71d858b",
+   "size": 774
+  },
+  "lines/override/coldboot1/PARTICLES.mnu": {
+   "sha256": "1d7f67a0fc1ada14ae95062a74818b9185429c299431723f060369199121f7a3",
+   "size": 1296
+  },
+  "lines/override/coldboot2/BACKGROUND.mnu": {
+   "sha256": "edab672fed06be14f2048aa367d1ddb24d64e90c4a3777d882c46ffd9cbbd433",
+   "size": 460
+  },
+  "lines/override/coldboot2/HDR.mnu": {
+   "sha256": "178296f619280db5eaebc82343e0a2ab950f6aaa21609347d4ce8d4269c9498c",
+   "size": 348
+  },
+  "lines/override/coldboot2/LINE1.mnu": {
+   "sha256": "36999384e78f32f6663ae5a58dac5dededd8046e3b416a6c4e2a5e8dbb02ca8b",
+   "size": 790
+  },
+  "lines/override/coldboot2/PARTICLES.mnu": {
+   "sha256": "1d7f67a0fc1ada14ae95062a74818b9185429c299431723f060369199121f7a3",
+   "size": 1296
+  },
+  "lines/override/day/BACKGROUND.mnu": {
+   "sha256": "edab672fed06be14f2048aa367d1ddb24d64e90c4a3777d882c46ffd9cbbd433",
+   "size": 460
+  },
+  "lines/override/day/HDR.mnu": {
+   "sha256": "178296f619280db5eaebc82343e0a2ab950f6aaa21609347d4ce8d4269c9498c",
+   "size": 348
+  },
+  "lines/override/day/LINE1.mnu": {
+   "sha256": "36999384e78f32f6663ae5a58dac5dededd8046e3b416a6c4e2a5e8dbb02ca8b",
+   "size": 790
+  },
+  "lines/override/day/PARTICLES.mnu": {
+   "sha256": "37a37940392061cea82f432d8aa81192ddde7acf98efaf50eaa7e6ee62304c0e",
+   "size": 1294
+  },
+  "lines/override/gameboot1/BACKGROUND.mnu": {
+   "sha256": "a596ef20a4579b6a408b88bd8118af737744d7a3b95d2596bcb39c5efbf05d84",
+   "size": 340
+  },
+  "lines/override/gameboot1/HDR.mnu": {
+   "sha256": "1fb72efe7914ff8604d2dad0ed94b7d685aff24b41386b927541b61d1f8cac6e",
+   "size": 351
+  },
+  "lines/override/gameboot1/LINE1.mnu": {
+   "sha256": "648137b39be30737e1df365b493afd137add46b507dad491d7e56762fdeaa918",
+   "size": 794
+  },
+  "lines/override/gameboot2/BACKGROUND.mnu": {
+   "sha256": "0790f2cf2b51012fdc3480581130044210f7a54da85563c9bf04928b3d422bbc",
+   "size": 296
+  },
+  "lines/override/gameboot2/HDR.mnu": {
+   "sha256": "c8b77fe720b0b67db8c181fb4d18dd68443e9f41bae4784fd606f440fadbbc99",
+   "size": 329
+  },
+  "lines/override/gameboot2/LINE1.mnu": {
+   "sha256": "5e17b72231b0ff544bf3ef22ccd07b9db334d6d35a5b2bfe43512d3ced842821",
+   "size": 798
+  },
+  "lines/override/gameboot3/BACKGROUND.mnu": {
+   "sha256": "ddb58c914718b87c820a83413c75056c103453c11cffd177049ab7346a54d84f",
+   "size": 387
+  },
+  "lines/override/gameboot3/HDR.mnu": {
+   "sha256": "d3daa69d8ee1cc16f1dd5ed663da6411fdc161dd03e04c7bfdd02be0053d6594",
+   "size": 317
+  },
+  "lines/override/gameboot3/LINE1.mnu": {
+   "sha256": "8bc6b94ba6a75b45685c8b4bb581146e88d21bd2a1574e9e85d140e4f33ee327",
+   "size": 788
+  },
+  "lines/override/gameboot3/PARTICLES.mnu": {
+   "sha256": "d5c945f1852a54c896aaa76a58db564da41c0894b95ffc8a5ec645e8a2dbbf1d",
+   "size": 1290
+  },
+  "lines/override/gameboot4/BACKGROUND.mnu": {
+   "sha256": "ddb58c914718b87c820a83413c75056c103453c11cffd177049ab7346a54d84f",
+   "size": 387
+  },
+  "lines/override/gameboot4/HDR.mnu": {
+   "sha256": "c8b77fe720b0b67db8c181fb4d18dd68443e9f41bae4784fd606f440fadbbc99",
+   "size": 329
+  },
+  "lines/override/gameboot4/LINE1.mnu": {
+   "sha256": "6358e238502ff00837db8a4dddc3c65c162aa606e0a54f534c1c043e4c9e3e3d",
+   "size": 776
+  },
+  "lines/override/gameboot4/PARTICLES.mnu": {
+   "sha256": "f1fe262b0653d4c02137a8269db6a248b3fbef11919a1312d483ff1c43920088",
+   "size": 1290
+  },
+  "lines/override/gameboot5/BACKGROUND.mnu": {
+   "sha256": "b650f76068172c63211d2b40f75cbb20e9cf58aa9a68084f79a1bb00014884b4",
+   "size": 264
+  },
+  "lines/override/gameboot5/HDR.mnu": {
+   "sha256": "c8b77fe720b0b67db8c181fb4d18dd68443e9f41bae4784fd606f440fadbbc99",
+   "size": 329
+  },
+  "lines/override/gameboot5/LINE1.mnu": {
+   "sha256": "6358e238502ff00837db8a4dddc3c65c162aa606e0a54f534c1c043e4c9e3e3d",
+   "size": 776
+  },
+  "lines/override/higure/BACKGROUND.mnu": {
+   "sha256": "edab672fed06be14f2048aa367d1ddb24d64e90c4a3777d882c46ffd9cbbd433",
+   "size": 460
+  },
+  "lines/override/higure/HDR.mnu": {
+   "sha256": "c9cbbfbcee99590a0267f14f0cf1809d2459d713d5580e5c7d00c6675f37f5c3",
+   "size": 322
+  },
+  "lines/override/higure/LINE1.mnu": {
+   "sha256": "73b590aec5e26e90ceedf2678963c46fc63215518d0248a5d5824f6293d4f837",
+   "size": 768
+  },
+  "lines/override/higure/PARTICLES.mnu": {
+   "sha256": "967f2204171caff9279c94516e234f7d8e3b76e303068fc098e251a4a5368175",
+   "size": 1293
+  },
+  "lines/override/initial_setting/BACKGROUND.mnu": {
+   "sha256": "36fc935ef61446e8ac8ffcb197103da4de9e714536dd75cac532df0fd74e4d92",
+   "size": 269
+  },
+  "lines/override/initial_setting/HDR.mnu": {
+   "sha256": "c8b77fe720b0b67db8c181fb4d18dd68443e9f41bae4784fd606f440fadbbc99",
+   "size": 329
+  },
+  "lines/override/initial_setting/LINE1.mnu": {
+   "sha256": "ec5aa43ad8a300f87bd85515378ef1e1fb56fa3d3422a1c062a03e6d98d53b55",
+   "size": 760
+  },
+  "lines/override/music_1/BACKGROUND.mnu": {
+   "sha256": "40df156f59dde4663c3d72fd2d35102942e0c35b34a56d8052fff1d328b78467",
+   "size": 255
+  },
+  "lines/override/music_1/HDR.mnu": {
+   "sha256": "7cdcc907f18acc8502f9dac869214ebb9780c257d32185bf683b9ecbf8b9cfcb",
+   "size": 352
+  },
+  "lines/override/music_1/LINE1.mnu": {
+   "sha256": "a9419bf5de61fae0aa901e831a07302c26aa37cda1aad0c73c188694dd71f391",
+   "size": 784
+  },
+  "lines/override/music_1/PARTICLES.mnu": {
+   "sha256": "2ada107625553d5a29f2386776cc7c796067a4874e32e3fd1796ddb7bc9bf758",
+   "size": 1294
+  },
+  "lines/override/night/BACKGROUND.mnu": {
+   "sha256": "edab672fed06be14f2048aa367d1ddb24d64e90c4a3777d882c46ffd9cbbd433",
+   "size": 460
+  },
+  "lines/override/night/HDR.mnu": {
+   "sha256": "c8b77fe720b0b67db8c181fb4d18dd68443e9f41bae4784fd606f440fadbbc99",
+   "size": 329
+  },
+  "lines/override/night/LINE1.mnu": {
+   "sha256": "5d5544056411758c004780cfbadbc0bf525c88a5856f866067d806e68b7d6672",
+   "size": 758
+  },
+  "lines/override/night/PARTICLES.mnu": {
+   "sha256": "b70c8df86d97989ccee7acbb764f51ed873801f3e526dc0654ce106c33ae85d8",
+   "size": 1294
+  },
+  "lines/override/welcome_1/BACKGROUND.mnu": {
+   "sha256": "80ed7277be8150f568b843473d6d7e687fe5fa488e4958ac1684c73868167649",
+   "size": 483
+  },
+  "lines/override/welcome_1/HDR.mnu": {
+   "sha256": "43c30f112f02197b592c34b649a25937c3ed74cdbe8f1d1e8fb385efd92a4cd4",
+   "size": 328
+  },
+  "lines/override/welcome_1/LINE1.mnu": {
+   "sha256": "36999384e78f32f6663ae5a58dac5dededd8046e3b416a6c4e2a5e8dbb02ca8b",
+   "size": 790
+  },
+  "lines/override/welcome_1/PARTICLES.mnu": {
+   "sha256": "a880aee8d9e89d9ddd23c1938d11675af24fa8b818eb38796a67db1966188013",
+   "size": 1333
+  },
+  "lines/override/welcome_2/BACKGROUND.mnu": {
+   "sha256": "b727a799074f58225da7948efa92b4338882b0906ab94f2523a869830c51115b",
+   "size": 474
+  },
+  "lines/override/welcome_2/HDR.mnu": {
+   "sha256": "43c30f112f02197b592c34b649a25937c3ed74cdbe8f1d1e8fb385efd92a4cd4",
+   "size": 328
+  },
+  "lines/override/welcome_2/LINE1.mnu": {
+   "sha256": "36999384e78f32f6663ae5a58dac5dededd8046e3b416a6c4e2a5e8dbb02ca8b",
+   "size": 790
+  },
+  "lines/override/welcome_2/PARTICLES.mnu": {
+   "sha256": "a880aee8d9e89d9ddd23c1938d11675af24fa8b818eb38796a67db1966188013",
+   "size": 1333
+  },
+  "lines/override/yoake/BACKGROUND.mnu": {
+   "sha256": "edab672fed06be14f2048aa367d1ddb24d64e90c4a3777d882c46ffd9cbbd433",
+   "size": 460
+  },
+  "lines/override/yoake/HDR.mnu": {
+   "sha256": "8d7f98c474d63d078b8540ec405e9792fa179db8b30f9336b392f63c97351a42",
+   "size": 334
+  },
+  "lines/override/yoake/LINE1.mnu": {
+   "sha256": "9799e625a3a91d153066581a8c3cbff2d8d761901935cad174507bb49d188674",
+   "size": 784
+  },
+  "lines/override/yoake/PARTICLES.mnu": {
+   "sha256": "3b439b5adf39ed76ee30d4dc5bb4c143686f8502528268788385577bc4ffa705",
+   "size": 1294
+  },
+  "lines/particles/proc_iridescent.tga": {
+   "sha256": "47420dbba4eb08f57f5d1b42408fe689c6a5cdf00d2dc7aa548dda62edf5f75a",
+   "size": 65580
+  },
+  "lines/spurs/moyou/spline/spline.elf": {
+   "sha256": "587f66dc18f88b6090db30bbbf8a54d569a9e2815271beeefd3b44b6b2f84eaa",
+   "size": 29284
+  },
+  "lines/spurs/particles/particles/particles.elf": {
+   "sha256": "7861469441ff1d338ad503eeaa450faeb70c42f8f59764bcbbdeb24187061ea1",
+   "size": 34484
+  },
+  "lines/textures/TGA/Noise.tga": {
+   "sha256": "4d97ae80ea879998cdfa8c351c82d7268600cba7b701579243c5ce63d6939b7e",
+   "size": 13349
+  },
+  "lines/textures/TGA/freslut.tga": {
+   "sha256": "579372d4b533fc4e488f4d987d8d37188b4a7a2ada3e940dd889b7dcf127cc32",
+   "size": 2092
+  },
+  "lines/textures/TGA/freslut0.tga": {
+   "sha256": "978a400a5d72d465a5fde3db82af52730d7ea304b6bc2887f52af6f27f5f47d0",
+   "size": 1580
+  },
+  "lines/textures/TGA/freslut1.tga": {
+   "sha256": "04a6ac6de7dbfa993922e9bed47cddb69ee6a6e2ac5d7f8174e7a652a3eeeb04",
+   "size": 1580
+  },
+  "lines/textures/TGA/freslut2.tga": {
+   "sha256": "5ca9fce58501a31a12925ce2ce54dc8d11d4a9e9ebef965721dcef1e0fe14aae",
+   "size": 2092
+  },
+  "lines/textures/month_bg/night/01.dds": {
+   "sha256": "911826ad0c80808b7b508697a71827d5dcf6ea1fe2fa9e3dea7f127bfaf82ef4",
+   "size": 11040
+  },
+  "lines/textures/month_bg/night/02.dds": {
+   "sha256": "dbb875f08174c8cc2ae7e7f6ff35b7618113e0e1b7f9a587efb2c73b11c70817",
+   "size": 11040
+  },
+  "lines/textures/month_bg/night/03.dds": {
+   "sha256": "08a17538067d6b9cbbf7ddc3489e8f57cd535335378eb8f4abb56beabc0dcd76",
+   "size": 11040
+  },
+  "lines/textures/month_bg/night/04.dds": {
+   "sha256": "24fa42882c61603effd9178c6dfcb07cb2fcee4e34483edaf051beff6c274c68",
+   "size": 11040
+  },
+  "lines/textures/month_bg/night/05.dds": {
+   "sha256": "79b141f48773a94f75fafa265b05968c35e8a9a241068bccaebc192de33fcc63",
+   "size": 11040
+  },
+  "lines/textures/month_bg/night/06.dds": {
+   "sha256": "4473bd71741a8dd3b243dc9ce0f718688a873b35b9b56b1d40128ff19003e491",
+   "size": 11040
+  },
+  "lines/textures/month_bg/night/07.dds": {
+   "sha256": "3ba3025a9bcc261c29ae6169c84e01b3152e725fee87cdc1bcc2a94e7625ae67",
+   "size": 11040
+  },
+  "lines/textures/month_bg/night/08.dds": {
+   "sha256": "7933e899c75ec4fe571fc51c7e6f3ebf60641ba3feee9a1c16b453b8590bccc2",
+   "size": 11040
+  },
+  "lines/textures/month_bg/night/09.dds": {
+   "sha256": "566b0686d1162005da0fca8eef155ab8260cebc32a794fcca0b9f15d1f585795",
+   "size": 11040
+  },
+  "lines/textures/month_bg/night/10.dds": {
+   "sha256": "21aca7de9b1619fc366d344ddfea8a9bb0563b95691febc5b0f14a51bf475533",
+   "size": 11040
+  },
+  "lines/textures/month_bg/night/11.dds": {
+   "sha256": "786294699114a77473a39eb22c77a753bfb35d126f98244e40c5314e9207e734",
+   "size": 11040
+  },
+  "lines/textures/month_bg/night/12.dds": {
+   "sha256": "0c3219c4a23dfd5dfa449a2c77d75a78083c9825114cf5ed33a890fd652f0f70",
+   "size": 11040
+  },
+  "lines/textures/month_bg/rgb/01.dds": {
+   "sha256": "11498c4148df4591289cd99dc650d8684d16b5577b7f56c4eb469479ff0717dc",
+   "size": 11040
+  },
+  "lines/textures/month_bg/rgb/02.dds": {
+   "sha256": "79858aca44bc8a64ba905b3b1cac69ce9d70bc809a29ca8dcf2266fc67ff3e6f",
+   "size": 11040
+  },
+  "lines/textures/month_bg/rgb/03.dds": {
+   "sha256": "1ee8f177e4dbe8dcf7b8928c076a0584407cdd968747db4d7e7b1ea18f2d4fd4",
+   "size": 11040
+  },
+  "lines/textures/month_bg/rgb/04.dds": {
+   "sha256": "8fbe0e42f832343df3be373f5b586a656126b044da84df4dbfbb1ec6cd8c04a5",
+   "size": 11040
+  },
+  "lines/textures/month_bg/rgb/05.dds": {
+   "sha256": "91abb90fb58e123e91f7e13364a6651244d613069d3cb8f1290bcaefe99bd53e",
+   "size": 11040
+  },
+  "lines/textures/month_bg/rgb/06.dds": {
+   "sha256": "4ece8fb3f0227b8061d9384c4d9e9dcffaf232b76d51c346d257ba5a89f1a4a3",
+   "size": 11040
+  },
+  "lines/textures/month_bg/rgb/07.dds": {
+   "sha256": "aac6d76a9e42dd8a8cbfbf1e0e5690abc8109f7d2f6fc744e8e38bc8bff93ec5",
+   "size": 11040
+  },
+  "lines/textures/month_bg/rgb/08.dds": {
+   "sha256": "1d78a2cf43268cc2c18d8ad4455bbac5b28464d264b38a2ca114d6086de21f33",
+   "size": 11040
+  },
+  "lines/textures/month_bg/rgb/09.dds": {
+   "sha256": "036bd8d230d17c5d5780c177d327d504533c4902afd036a1466661ec2a3a3350",
+   "size": 11040
+  },
+  "lines/textures/month_bg/rgb/10.dds": {
+   "sha256": "6b0d1e588ac4aed1afd773bfd2030c46d9067f1ae2470e294c14a8dac8d7928c",
+   "size": 11040
+  },
+  "lines/textures/month_bg/rgb/11.dds": {
+   "sha256": "47668d847e7d24954e3267df7218346b8b7935267b3c2453a417230b408bf0b1",
+   "size": 11040
+  },
+  "lines/textures/month_bg/rgb/12.dds": {
+   "sha256": "2e6611a91c272035b8e75fe4460101be22112c786bb846ea06286866bc631586",
+   "size": 11040
+  },
+  "original/custom_render_plugin.sprx": {
+   "sha256": "d0d9d4477f3fa0ce9edf7f1afcdd924f3e11bca03d9e0550fa09a70008820bef",
+   "size": 315225
+  },
+  "original/lines.qrc": {
+   "sha256": "dc6f6e303a930d03cb110c7dc6aa15968401ca27a4745025a9c73baf583fb685",
+   "size": 185105
+  }
+ },
+ "note": "SHA-256 and size of every file the renderer needs, as extracted from Sony's PS3 system software 4.93. Hashes only; the files come from the user's update.",
+ "schema": "moyou.firmware-inputs.v1"
+}

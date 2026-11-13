@@ -7,23 +7,19 @@ recorded video is played back.
 
 ## Install
 
-You need your own copy of Sony's PS3 system software update 4.93 (`PS3UPDAT.PUP`). Nothing
-from it is included here.
-
 1. Install the build dependencies (Qt 6.9 or newer):
    - Arch: `sudo pacman -S --needed base-devel cmake ninja qt6-base qt6-declarative python-cryptography`
    - Fedora: `sudo dnf install gcc-c++ cmake ninja-build qt6-qtbase-devel qt6-qtdeclarative-devel openssl-devel python3-cryptography`
    - Debian/Ubuntu (with Qt 6.9+): `sudo apt install build-essential cmake ninja-build qt6-base-dev qt6-declarative-dev libssl-dev python3-cryptography`
-2. Run:
-   ```bash
-   ./install.sh /path/to/PS3UPDAT.PUP
-   ```
-   It checks the update, extracts what the renderer needs into `~/.local/share/ps3-xmb`,
-   builds, installs the wallpaper and restarts the Plasma shell.
+2. Run `./install.sh`.
 3. Right-click the desktop > Desktop and Wallpaper > Wallpaper type: **PS3 XMB Waves**.
 
-Run `./install.sh` without arguments to rebuild and reinstall after an update; the imported
-data is kept.
+The first run downloads Sony's free PS3 system software update (about 200 MB) from Sony's
+update server, takes the renderer's shaders, parameters and textures out of it into
+`~/.local/share/ps3-xmb` (every file checked by SHA-256) and deletes the download. None of
+Sony's files are part of this repository. It then builds, installs the wallpaper and restarts
+the Plasma shell. Already have `PS3UPDAT.PUP` (4.93)? Use `./install.sh /path/to/PS3UPDAT.PUP`.
+Later runs of `./install.sh` rebuild and reinstall and keep the imported data.
 
 ### Multiple screens
 

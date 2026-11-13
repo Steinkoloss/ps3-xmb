@@ -1,10 +1,12 @@
 #!/bin/sh
-# Install the PS3 XMB wallpaper for KDE Plasma 6 from your own PS3 firmware update.
+# Install the PS3 XMB wallpaper for KDE Plasma 6.
 #
-#   ./install.sh /path/to/PS3UPDAT.PUP     build, import the firmware data, install
-#   ./install.sh                           rebuild and reinstall (keeps imported data)
+#   ./install.sh                           first time: download Sony's PS3 system software
+#                                          (about 200 MB) and take the renderer's data from it;
+#                                          later: rebuild and reinstall, keeping that data
+#   ./install.sh /path/to/PS3UPDAT.PUP     use an update file you already have
 #
-# PS3UPDAT.PUP is Sony's system software 4.93 update; it is checked by SHA-256.
+# Every file taken from the update is checked by SHA-256 against the verified 4.93 renderer.
 set -e
 root=$(cd "$(dirname "$0")" && pwd)
 data=${XDG_DATA_HOME:-$HOME/.local/share}/ps3-xmb
@@ -20,7 +22,7 @@ if [ -n "$1" ]; then
     [ -f "$1" ] || fail "no such file: $1"
     python3 "$root/native/tools/import_data.py" "$1" --output "$data"
 elif [ ! -f "$data/cpu/renderer-image.bin" ]; then
-    fail "pass your PS3UPDAT.PUP (firmware 4.93) the first time: ./install.sh /path/to/PS3UPDAT.PUP"
+    python3 "$root/native/tools/import_data.py" --output "$data"
 fi
 
 echo "Building..."
