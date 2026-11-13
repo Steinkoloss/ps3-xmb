@@ -73,7 +73,7 @@ public:
     // Subscribers (GUI thread): updated after every frame, told about failures. The
     // simulation runs while any of them runs, for the union of their desktop rectangles.
     void subscribe(XmbItem* item, QRectF area, bool running) {
-        { std::lock_guard lock(items_); subscribers_[item] = {area, running}; }
+        { std::lock_guard lock(items_); subscribers_[item] = {area, running, {}}; }
         refresh();
     }
     void unsubscribe(XmbItem* item) {

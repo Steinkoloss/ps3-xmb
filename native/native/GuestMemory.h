@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// Big-endian guest memory accessors (defined in RopeSolver.cpp). Builds with the private
+// Big-endian guest memory accessors (defined, inline, in RopeSolver.cpp). Builds with the private
 // original translations take these declarations from the translation's header instead.
 #pragma once
 #include <cstdint>
 
 extern "C" {
-uint8_t vm_read8(uint64_t address);
-uint16_t vm_read16(uint64_t address);
-uint32_t vm_read32(uint64_t address);
-uint64_t vm_read64(uint64_t address);
-void vm_write8(uint64_t address, uint8_t value);
-void vm_write16(uint64_t address, uint16_t value);
-void vm_write32(uint64_t address, uint32_t value);
-void vm_write64(uint64_t address, uint64_t value);
+inline uint8_t vm_read8(uint64_t address);
+inline uint16_t vm_read16(uint64_t address);
+inline uint32_t vm_read32(uint64_t address);
+inline uint64_t vm_read64(uint64_t address);
+inline void vm_write8(uint64_t address, uint8_t value);
+inline void vm_write16(uint64_t address, uint16_t value);
+inline void vm_write32(uint64_t address, uint32_t value);
+inline void vm_write64(uint64_t address, uint64_t value);
 }
 
 // The relocated custom_render_plugin image (tools/renderer_image.py), firmware 4.93.

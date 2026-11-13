@@ -151,30 +151,35 @@ void firmwareMath(ppu_context* ctx, void (*function)(ppu_context*)) {
 }
 
 // Inlined into the translations (LTO); the permission check stays on every access.
+#ifdef MOYOU_ORIGINAL_CPU
+#define GUEST_ACCESS [[gnu::always_inline]]
+#else
+#define GUEST_ACCESS inline
+#endif
 extern "C" {
-[[gnu::always_inline]] uint8_t vm_read8(uint64_t address) { check(address, 1); return vm_base[address]; }
-[[gnu::always_inline]] uint16_t vm_read16(uint64_t address) {
+GUEST_ACCESS uint8_t vm_read8(uint64_t address) { check(address, 1); return vm_base[address]; }
+GUEST_ACCESS uint16_t vm_read16(uint64_t address) {
     check(address, 2);
     uint16_t v; std::memcpy(&v, vm_base + address, 2); return __builtin_bswap16(v);
 }
-[[gnu::always_inline]] uint32_t vm_read32(uint64_t address) {
+GUEST_ACCESS uint32_t vm_read32(uint64_t address) {
     check(address, 4);
     uint32_t v; std::memcpy(&v, vm_base + address, 4); return __builtin_bswap32(v);
 }
-[[gnu::always_inline]] uint64_t vm_read64(uint64_t address) {
+GUEST_ACCESS uint64_t vm_read64(uint64_t address) {
     check(address, 8);
     uint64_t v; std::memcpy(&v, vm_base + address, 8); return __builtin_bswap64(v);
 }
-[[gnu::always_inline]] void vm_write8(uint64_t address, uint8_t value) { check(address, 1, true); vm_base[address] = value; }
-[[gnu::always_inline]] void vm_write16(uint64_t address, uint16_t value) {
+GUEST_ACCESS void vm_write8(uint64_t address, uint8_t value) { check(address, 1, true); vm_base[address] = value; }
+GUEST_ACCESS void vm_write16(uint64_t address, uint16_t value) {
     check(address, 2, true);
     value = __builtin_bswap16(value); std::memcpy(vm_base + address, &value, 2);
 }
-[[gnu::always_inline]] void vm_write32(uint64_t address, uint32_t value) {
+GUEST_ACCESS void vm_write32(uint64_t address, uint32_t value) {
     check(address, 4, true);
     value = __builtin_bswap32(value); std::memcpy(vm_base + address, &value, 4);
 }
-[[gnu::always_inline]] void vm_write64(uint64_t address, uint64_t value) {
+GUEST_ACCESS void vm_write64(uint64_t address, uint64_t value) {
     check(address, 8, true);
     value = __builtin_bswap64(value); std::memcpy(vm_base + address, &value, 8);
 }
