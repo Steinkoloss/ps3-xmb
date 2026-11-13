@@ -7,7 +7,11 @@
 #endif
 #include "CellEstimate.h"
 #include "Sha256.h"
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <sys/mman.h>
+#endif
 #include <bit>
 #include <immintrin.h>
 #include <cmath>
@@ -449,14 +453,24 @@ struct RopeSolver::State {
 #endif
     State() {
         if (vm_base) throw std::runtime_error("The CPU baseline currently permits one rope instance");
+#ifdef _WIN32
+        auto* memory = VirtualAlloc(nullptr, ppu_vm_size, MEM_RESERVE, PAGE_NOACCESS);
+        if (!memory) throw std::runtime_error("Cannot reserve original CPU address space");
+#else
         auto* memory = mmap(nullptr, ppu_vm_size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
         if (memory == MAP_FAILED) throw std::runtime_error("Cannot reserve original CPU address space");
+#endif
         vm_base = static_cast<uint8_t*>(memory);
         for (const auto [start, size] : std::array<std::array<uint32_t, 2>, 5>{
                 {{0x00000000,0x00800000},{object,0x00020000},{heapBase,0x00400000},{0x01f00000,0x00200000},
                  {particleBase,particleEnd - particleBase}}}) {
+#ifdef _WIN32
+            if (!VirtualAlloc(vm_base + start, size, MEM_COMMIT, PAGE_READWRITE)) {
+                VirtualFree(vm_base, 0, MEM_RELEASE); vm_base = nullptr;
+#else
             if (mprotect(vm_base + start, size, PROT_READ | PROT_WRITE)) {
                 munmap(vm_base, ppu_vm_size); vm_base = nullptr;
+#endif
                 throw std::runtime_error("Cannot map original CPU memory regions");
             }
         }
@@ -478,7 +492,11 @@ struct RopeSolver::State {
         capturedTextures.clear();
         lockedTextures.clear();
     }
+#ifdef _WIN32
+    ~State() { VirtualFree(vm_base, 0, MEM_RELEASE); vm_base = nullptr; }
+#else
     ~State() { munmap(vm_base, ppu_vm_size); vm_base = nullptr; }
+#endif
 };
 
 RopeSolver::RopeSolver(const std::string& image, const std::string& math) : state_(std::make_unique<State>()) {
