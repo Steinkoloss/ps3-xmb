@@ -34,6 +34,7 @@ public:
     std::array<Texture, 2> textures();
     std::array<Texture, 2> texturesOriginal();
     ExposureTables exposure(float exposure, float white, float threshold, float gamma, float dither);
+    ExposureTables exposureOriginal(float exposure, float white, float threshold, float gamma, float dither);
     // Compares native noise with the original exposure update for successive frames.
     bool checkExposureNoise(unsigned frames);
     GlareWeights glareWeights(Vector radii, float sumPower, float level);

@@ -1048,15 +1048,95 @@ std::vector<uint8_t> RopeSolver::exposureNoise() {
     return noise;
 }
 
+namespace {
+// Half float as the exposure update packs it (0x02071860): truncated mantissa, exponents
+// below the half range flush to +0, above it clamp to 31.
+uint16_t exposureHalf(float value) {
+    const uint32_t bits = std::bit_cast<uint32_t>(value);
+    const int32_t exponent = int32_t((bits >> 23) & 0xff) - 112;
+    if (!bits || exponent < 0) return 0;
+    return uint16_t(((bits >> 16) & 0x8000) | uint32_t(std::min(exponent, 31)) << 10 | ((bits >> 13) & 0x3ff));
+}
+float halfToFloat(uint16_t h) {
+    uint32_t word = uint32_t(h & 0x8000) << 16;
+    auto exponent = (h >> 10) & 31, mantissa = h & 1023;
+    if (exponent == 31) word |= 0x7f800000 | (mantissa << 13);
+    else if (exponent) word |= uint32_t(exponent + 112) << 23 | (mantissa << 13);
+    else if (mantissa) {
+        int shift = 0;
+        while (!(mantissa & 1024)) { mantissa <<= 1; ++shift; }
+        word |= uint32_t(113 - shift) << 23 | ((mantissa & 1023) << 13);
+    }
+    return std::bit_cast<float>(word);
+}
+}
+
+// Exposure update 0x02071794: tone curve L = x(1 + x/w²)/(1 + x) over x = i/127·16·exposure,
+// and glare G = L/clamp(L,0,1)·(L − threshold)/8, packed as halves into the 128 x 128 RG
+// lookups 0x3001 (L[y], L[x]) and 0x3002 (G[max(x,y)], L[x]); the 32 x 32 dither noise
+// (exposureNoise) advances the RNG word every call.
 RopeSolver::ExposureTables RopeSolver::exposure(float value, float white, float threshold, float gamma, float dither) {
-    // The lookup tables depend only on these inputs; reuse them and generate the
-    // per-frame noise natively (checked against the original by --noise-check).
     const std::array<float, 5> inputs{value, white, threshold, gamma, dither};
-    if (exposureCache_ && exposureInputs_ == inputs) {
+    if (exposureCache_ && exposureInputs_ == inputs && !verifyNative()) {
         ExposureTables tables = *exposureCache_;
         tables.noise.rgba = exposureNoise();
         return tables;
     }
+    writeFloat(toneObject + 0x29c, value);
+    writeFloat(toneObject + 0x2a0, white);
+    writeFloat(toneObject + 0x2a8, threshold);
+    writeFloat(toneObject + 0x2e0, gamma);
+    writeFloat(toneObject + 0x2dc, dither);
+    std::array<uint16_t, 128> tone{}, glare{};
+    const float inverseWhite = 1.0f / (white * white);
+    for (unsigned i = 0; i < 128; ++i) {
+        const float x = ((float(int32_t(i)) / 127.0f) * 16.0f) * value;
+        const float shoulder = 1.0f / (x + 1.0f);
+        const float L = shoulder * (x * std::fma(inverseWhite, x, 1.0f));
+        tone[i] = exposureHalf(L * gamma);
+        const float clamped = L < 0.0f ? 0.0f : L > 1.0f ? 1.0f : L;
+        // 0/0 at i = 0: PowerPC's default NaN is positive, x86's negative.
+        float ratio = L / clamped;
+        if (ratio != ratio && L == L && clamped == clamped) ratio = std::bit_cast<float>(0x7fc00000u);
+        glare[i] = exposureHalf((ratio * (L - threshold)) * 0.125f);
+    }
+    ExposureTables tables;
+    for (unsigned table = 0; table < 2; ++table) {
+        auto& output = tables.rgba[table];
+        output.assign(128 * 128 * 4, 0.0f);
+        for (unsigned y = 0; y < 128; ++y)
+            for (unsigned x = 0; x < 128; ++x) {
+                const unsigned pixel = y * 128 + x;
+                // Original G16R16F samplers expose the transposed RG lookup through XY, and the
+                // blue/glare lookup through ZW.
+                if (table == 0) {
+                    output[pixel * 4 + 1] = halfToFloat(tone[y]);
+                    output[pixel * 4 + 0] = halfToFloat(tone[x]);
+                    output[pixel * 4 + 3] = 1;
+                } else {
+                    output[pixel * 4 + 3] = halfToFloat(glare[std::max(x, y)]);
+                    output[pixel * 4 + 2] = halfToFloat(tone[x]);
+                }
+            }
+    }
+    const auto state = vm_read32(toneObject + 0x150);
+    tables.noise = {32, 32, exposureNoise()};
+    if (verifyNative()) {
+        const auto after = vm_read32(toneObject + 0x150);
+        vm_write32(toneObject + 0x150, state);
+        const auto original = exposureOriginal(value, white, threshold, gamma, dither);
+        for (unsigned table = 0; table < 2; ++table)
+            reportDifference(table ? "exposure glare table" : "exposure tone table", tables.rgba[table].data(),
+                original.rgba[table].data(), tables.rgba[table].size() * sizeof(float));
+        reportDifference("exposure noise", tables.noise.rgba.data(), original.noise.rgba.data(), tables.noise.rgba.size());
+        if (vm_read32(toneObject + 0x150) != after) std::fprintf(stderr, "native exposure: 4 bytes differ (RNG word)\n");
+    }
+    exposureCache_ = std::make_unique<ExposureTables>(tables);
+    exposureInputs_ = inputs;
+    return tables;
+}
+
+RopeSolver::ExposureTables RopeSolver::exposureOriginal(float value, float white, float threshold, float gamma, float dither) {
     writeFloat(toneObject + 0x29c, value);
     writeFloat(toneObject + 0x2a0, white);
     writeFloat(toneObject + 0x2a8, threshold);
@@ -1095,8 +1175,6 @@ RopeSolver::ExposureTables RopeSolver::exposure(float value, float white, float 
     }
     const auto address = lockedTextures.at(0x3003)[0];
     tables.noise = {32,32,std::vector<uint8_t>(vm_base + address, vm_base + address + 32 * 32 * 4)};
-    exposureCache_ = std::make_unique<ExposureTables>(tables);
-    exposureInputs_ = inputs;
     return tables;
 }
 
@@ -1106,7 +1184,7 @@ bool RopeSolver::checkExposureNoise(unsigned frames) {
         const auto native = exposureNoise();
         vm_write32(toneObject + 0x150, saved);
         exposureCache_.reset();
-        const auto original = exposure(exposureInputs_[0], exposureInputs_[1], exposureInputs_[2], exposureInputs_[3], exposureInputs_[4]);
+        const auto original = exposureOriginal(exposureInputs_[0], exposureInputs_[1], exposureInputs_[2], exposureInputs_[3], exposureInputs_[4]);
         if (original.noise.rgba != native) return false;
     }
     return true;
