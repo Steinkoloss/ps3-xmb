@@ -1044,7 +1044,67 @@ unsigned RopeSolver::particleFrame(uint32_t system, uint32_t layer, const std::v
     return vm_read32(system + 0x16fc);
 }
 
+// Draw setup 0x0205c254: each uniform is a vector or matrix taken from the system's live
+// parameters (system+0x1340..0x1444), the life bounds and the qgl modelview's cached inverse;
+// the setters (0x0205bec0, 0x020409ec, ...) only store it. Nothing is set while no particle is
+// alive or the system is hidden (+0x1704). The draw submission itself belongs to the renderer.
 RopeSolver::ParticleUniforms RopeSolver::particleUniforms(uint32_t system) {
+    ParticleUniforms uniforms;
+    const auto vector = [&](uint32_t address) { Vector v; for (unsigned i = 0; i < 4; ++i) v[i] = readFloat(address + i * 4); return v; };
+    const auto field = [&](uint32_t offset) { return readFloat(system + offset); };
+    const bool drawn = vm_read32(system + 0x16fc) && !vm_read8(system + 0x1704);
+    for (const char* name : {"_ParticleSize", "_Transparency", "_Focus", "_FocusCurves", "_FrontFacingQuaternion", "_NearControl",
+                             "_LifeBoundsMin", "_LifeBoundsMax", "_Darkness", "_Glare"}) uniforms.vertex[name] = {};
+    for (const char* name : {"_Color", "_NearControl", "_Glare", "_Gamma", "_IridescentExp"}) uniforms.fragment[name] = {};
+    if (drawn) {
+        uniforms.camera = inverseCameraView();   // 0x0204081c: the modelview stack top's inverse
+        for (unsigned c = 0; c < 3; ++c) for (unsigned r = 0; r < 3; ++r)
+            if (uniforms.camera[c * 4 + r] != (c == r ? 1.0f : 0.0f)) throw std::runtime_error("Unadapted original camera rotation");
+        // Light pack 0x0203c17c: camera position, light direction | intensity, second direction, colour terms.
+        const Matrix light{uniforms.camera[12], uniforms.camera[13], uniforms.camera[14], uniforms.camera[15],
+                           field(0x13c0), field(0x13c4), field(0x13c8), field(0x13e0),
+                           field(0x13d0), field(0x13d4), field(0x13d8), 0.0f,
+                           field(0x13e8), field(0x13e4), field(0x13ec), field(0x13f4)};
+        uniforms.lightPack = uniforms.fragmentLightPack = light;
+        auto& v = uniforms.vertex;
+        v["_ParticleSize"] = {field(0x1400), field(0x1404), field(0x1408), 0};
+        v["_Darkness"] = {field(0x1418), field(0x142c), 0, 0};
+        v["_Transparency"] = {field(0x13f0), field(0x13fc), 0, 0};
+        v["_Focus"] = {field(0x140c), field(0x140c) + field(0x1410), field(0x1420), field(0x1420) + field(0x1424)};
+        v["_FrontFacingQuaternion"] = {0, 0, 0, 1};
+        v["_NearControl"] = {field(0x1434), field(0x141c), field(0x1430), 0};
+        v["_LifeBoundsMin"] = vector(system + 0x900);
+        v["_LifeBoundsMax"] = vector(system + 0x910);
+        v["_FocusCurves"] = {field(0x1414), field(0x1428), field(0x1358), 0};
+        v["_Glare"] = {field(0x1438), field(0x143c), field(0x1440), field(0x1444)};
+        auto& f = uniforms.fragment;
+        f["_Color"] = vector(system + 0x1340);
+        f["_Gamma"] = {field(0x1350), 0, 0, 0};
+        f["_NearControl"] = v["_NearControl"];
+        f["_Glare"] = v["_Glare"];
+        f["_IridescentExp"] = {field(0x13f8), 0, 0, 0};
+    }
+    uniforms.passes = (vm_read32(system + 0x1484) + 1) & 3;
+    if (!verifyNative()) return uniforms;
+    const auto original = particleUniformsOriginal(system);
+    const auto compare = [](const char* name, const auto& a, const auto& b) { reportDifference(name, a.data(), b.data(), sizeof a); };
+    compare("uniform camera", uniforms.camera, original.camera);
+    compare("uniform light pack", uniforms.lightPack, original.lightPack);
+    compare("uniform fragment light pack", uniforms.fragmentLightPack, original.fragmentLightPack);
+    for (const auto* maps : {&uniforms.vertex, &uniforms.fragment}) {
+        const auto& other = maps == &uniforms.vertex ? original.vertex : original.fragment;
+        if (maps->size() != other.size()) std::fprintf(stderr, "native uniforms: 1 bytes differ (names)\n");
+        for (const auto& [name, value] : *maps) {
+            const auto found = other.find(name);
+            if (found == other.end()) std::fprintf(stderr, "native uniform %s: 1 bytes differ (missing)\n", name.c_str());
+            else compare(("uniform " + name).c_str(), value, found->second);
+        }
+    }
+    if (uniforms.passes != original.passes) std::fprintf(stderr, "native uniform passes: 1 bytes differ\n");
+    return uniforms;
+}
+
+RopeSolver::ParticleUniforms RopeSolver::particleUniformsOriginal(uint32_t system) {
     auto& cpu = state_->particleCpu;
     // qgl context (unrelocated global 0x34) with one identity modelview and its cached inverse.
     if (!vm_read32(0x34)) {

@@ -60,6 +60,7 @@ public:
     };
     // Original draw setup 0x0205c254: uniform values for both particle programs.
     ParticleUniforms particleUniforms(uint32_t system);
+    ParticleUniforms particleUniformsOriginal(uint32_t system);
     std::vector<float> particleVertices(uint32_t system) const;
     // Pointer interaction (not in the firmware): add velocity to rope nodes (model space) and
     // to live particles near a cursor moving across the screen. clip: P·V(·M) column-major;
