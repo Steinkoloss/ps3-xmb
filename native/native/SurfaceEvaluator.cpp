@@ -1,5 +1,6 @@
 #include "SurfaceEvaluator.h"
 #include "SpuRuntime.h"
+#include "SpuEstimate.h"
 #include <algorithm>
 #include <bit>
 #include <cmath>
@@ -42,13 +43,14 @@ float word(const uint8_t* bytes) {
 }
 
 SurfaceEvaluator::SurfaceEvaluator(const std::string& original, unsigned threads) {
-    checked(moyou_spu_open(0, original.c_str()));
-    argument(3, 1);
-    argument(4, 0xffff);
-    checked(moyou_spu_call(0x5fd8, 10000));
     if (const auto* mode = std::getenv("MOYOU_SURFACE")) original_ = !std::strcmp(mode, "original");
     verify_ = std::getenv("MOYOU_VERIFY_NATIVE") != nullptr;
-    if (!original_ && !verify_) threads = 1;  // the native stages need no SPU contexts
+    // The native stages need no SPU: the translation and its local store are opened only to
+    // run or compare with the original.
+    localStore_ = original;
+    errors_.resize(1);   // one context until workers are started below
+    if (!original_ && !verify_) return;
+    openOriginal();
     if (const auto* forced = std::getenv("MOYOU_SPU_THREADS")) threads = unsigned(std::atoi(forced));
     if (!threads) threads = std::clamp(std::thread::hardware_concurrency(), 1u, 4u);
     threads = std::clamp(threads, 1u, 16u);
@@ -60,6 +62,16 @@ SurfaceEvaluator::SurfaceEvaluator(const std::string& original, unsigned threads
     start_ = std::make_unique<std::barrier<>>(threads);
     done_ = std::make_unique<std::barrier<>>(threads);
     for (unsigned worker = 1; worker < threads; ++worker) workers_.emplace_back([this, worker] { work(worker); });
+}
+
+void SurfaceEvaluator::openOriginal() {
+    if (spuOpen_) return;
+    checked(moyou_spu_open(0, localStore_.c_str()));
+    argument(3, 1);
+    argument(4, 0xffff);
+    checked(moyou_spu_call(0x5fd8, 10000));
+    spuOpen_ = true;
+    if (latticeReady_) lattice(controls_, scale1_, scale2_, offset_);   // into the local store too
 }
 
 SurfaceEvaluator::~SurfaceEvaluator() {
@@ -88,6 +100,7 @@ void SurfaceEvaluator::work(unsigned worker) {
 }
 
 void SurfaceEvaluator::write(uint32_t address, const void* bytes, size_t size) {
+    if (!spuOpen_) return;
     checked(moyou_spu_write(address, bytes, size));
     if (!workers_.empty()) log_.push_back({address, std::vector<uint8_t>(static_cast<const uint8_t*>(bytes),
         static_cast<const uint8_t*>(bytes) + size)});
@@ -127,16 +140,20 @@ void SurfaceEvaluator::lattice(const std::array<Vector, 128>& controls, Vector s
             }
     scale2_ = scale2;
     offset_ = offset;
-    // The original divides by the input scale with an estimate (0x3440: frest, fi); take
-    // that reciprocal from the original routine itself, once per lattice.
-    {
+    // The original divides by the input scale with an estimate (0x3440: frest, fi, then a
+    // product with 1.0, which is exact).
+    for (unsigned i = 0; i < 4; ++i) reciprocal_[i] = spuReciprocal(scale1[i]);
+    controls_ = controls; scale1_ = scale1;
+    if (spuOpen_) {
         const Vector ones{1, 1, 1, 1};
         const auto bytes = bigEndian(ones);
         checked(moyou_spu_write(0x12000, bytes.data(), bytes.size()));
         argument(3, 0x12000);
         vectorArgument(4, scale1);
         checked(moyou_spu_call(0x3440, 100));
-        reciprocal_ = result();
+        const auto original = result();
+        if (std::memcmp(original.data(), reciprocal_.data(), sizeof original))
+            std::fprintf(stderr, "native reciprocal: 16 bytes differ\n");
     }
     { const auto bytes = bigEndian(scale1); write(0xd590, bytes.data(), bytes.size()); }
     { const auto bytes = bigEndian(scale2); write(0xd5a0, bytes.data(), bytes.size()); }
@@ -145,6 +162,7 @@ void SurfaceEvaluator::lattice(const std::array<Vector, 128>& controls, Vector s
 }
 
 SurfaceEvaluator::Grid SurfaceEvaluator::projectOriginal(const Grid& nodes, const Matrix& matrix) {
+    openOriginal();
     if (!latticeReady_) throw std::runtime_error("The original surface requires its live FFD lattice");
     for (unsigned column = 0; column < 4; ++column) {
         Vector v;
@@ -168,6 +186,7 @@ SurfaceEvaluator::Grid SurfaceEvaluator::projectOriginal(const Grid& nodes, cons
 }
 
 SurfaceEvaluator::Mesh SurfaceEvaluator::subdivideOriginal(const Grid& grid) {
+    openOriginal();
     for (unsigned node = 0; node < grid.size(); ++node) {
         const auto bytes = bigEndian(grid[node]);
         write(0x9c00 + node * 16, bytes.data(), bytes.size());

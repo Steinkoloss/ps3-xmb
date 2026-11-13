@@ -31,8 +31,12 @@ private:
     Grid projectNative(const Grid& nodes, const Matrix& matrix) const;
     Mesh subdivideNative(const Grid& clipGrid) const;
     std::array<Vector, 7 * 7 * 11> lattice_{};
-    Vector scale2_{}, offset_{}, reciprocal_{};
-    bool original_ = false, verify_ = false;
+    Vector scale1_{}, scale2_{}, offset_{}, reciprocal_{};
+    std::array<Vector, 128> controls_{};
+    bool original_ = false, verify_ = false, spuOpen_ = false;
+    std::string localStore_;
+    // Opens the translated SPU program on the original local store (first original call).
+    void openOriginal();
     struct Write { uint32_t address; std::vector<uint8_t> bytes; };
     void write(uint32_t address, const void* bytes, size_t size);
     // Runs job(worker) on every context; workers first replay the logged writes.
