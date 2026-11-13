@@ -3,7 +3,7 @@
     "KPlugin": {
         "Description": "PlayStation 3 XMB waves running the original firmware programs",
         "Id": "org.ps3xmb.waves",
-        "License": "MIT",
+        "License": "GPL-2.0-or-later",
         "Name": "PS3 XMB Waves",
         "Version": "0.1"
     },

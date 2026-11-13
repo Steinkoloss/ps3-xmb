@@ -86,3 +86,10 @@ helpers), guest memory accessors inline with their permission check, and guest c
 for `x86-64-v3` (`MOYOU_GUEST_OPTIMIZATION`). Particles run beside the next rope/surface
 update; the FFD lattice is read back asynchronously; exposure tables are cached and only the
 dither noise is regenerated (native port, checked by `--noise-check`).
+
+## License
+
+GPL-2.0-or-later (see `LICENSE`). Parts from other projects keep their notices:
+`native/native/CellEstimate.h` (RPCS3, GPL-2.0-or-later), `native/native/SpuEstimate.h`
+(after ps3recomp, MIT), `player/assets` (see `player/assets/THIRD_PARTY_LICENSE`). Firmware
+data is not included and is not covered by this license; users supply their own update file.
