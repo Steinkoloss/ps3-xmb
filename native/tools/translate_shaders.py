@@ -48,14 +48,14 @@ def translate(reference, output):
             target = Path(name).with_suffix(suffix)
             destination = stage / target
             destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_text((vertex if program.profile == 7003 else fragment)(program))
+            destination.write_text((vertex if program.profile == 7003 else fragment)(program), newline="\n")
             # Development check: compile with glslangValidator when it is installed.
             checked = subprocess.run(["glslangValidator", str(destination)], capture_output=True, text=True) \
                 if shutil.which("glslangValidator") else None
             if checked and checked.returncode:
                 raise ValueError(f"Translated original shader did not compile: {name}\n{checked.stdout}{checked.stderr}")
             result["programs"][name] = {
-                "source_sha256": identity["sha256"], "glsl": str(target),
+                "source_sha256": identity["sha256"], "glsl": target.as_posix(),
                 "glsl_sha256": hashlib.sha256(destination.read_bytes()).hexdigest(),
                 "domain": program.domain,
                 "samplers": {str((i.words[0] >> 17) & 15): sampler_types[(i.words[0] >> 17) & 15]
@@ -64,7 +64,7 @@ def translate(reference, output):
                 "constants": {str(i.offset // 16 + 1): i.constant_bits for i in program.instructions
                               if getattr(i, "constant_bits", ())},
             }
-        (stage / "manifest.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+        (stage / "manifest.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", newline="\n")
         os.rename(stage, output)
     return result
 

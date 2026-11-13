@@ -121,7 +121,7 @@ def write_reference(pup_path, output):
             path = stage / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(content)
-        (stage / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+        (stage / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", newline="\n")
         os.rename(stage, output)
     return manifest
 

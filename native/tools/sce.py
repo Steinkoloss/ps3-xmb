@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 import shutil
 import subprocess
+import sys
 
 try:  # the Python cryptography package when installed, else the openssl command
     from cryptography.hazmat.primitives.ciphers import Cipher, algorithms
@@ -48,6 +49,8 @@ def decrypt(data, key, mode):
         from cryptography.hazmat.primitives.ciphers import modes as cipher_modes
         cipher = Cipher(algorithms.AES(key), (cipher_modes.CBC if name == "cbc" else cipher_modes.CTR)(iv)).decryptor()
         return cipher.update(data) + cipher.finalize()
+    if sys.platform == "win32":
+        return _windows_aes(bytes(data), bytes(key), name, iv)
     if not shutil.which("openssl"):
         raise ValueError("Decrypting the update needs the openssl command or Python's cryptography package")
     result = subprocess.run(["openssl", "enc", "-d", f"-aes-{len(key) * 8}-{name}", "-K", key.hex(), "-iv", iv.hex(),
@@ -55,6 +58,42 @@ def decrypt(data, key, mode):
     if result.returncode or len(result.stdout) != len(data):
         raise ValueError("openssl could not decrypt the update: " + result.stderr.decode(errors="replace").strip())
     return result.stdout
+
+
+def _windows_aes(data, key, name, iv):
+    """AES through Windows CNG (bcrypt.dll): CBC directly, CTR as ECB over the counter blocks."""
+    import ctypes
+    bcrypt = ctypes.WinDLL("bcrypt")
+    def check(status):
+        if status:
+            raise ValueError(f"Windows could not decrypt the update (CNG status {status & 0xFFFFFFFF:#x})")
+    algorithm, handle = ctypes.c_void_p(), ctypes.c_void_p()
+    check(bcrypt.BCryptOpenAlgorithmProvider(ctypes.byref(algorithm), ctypes.c_wchar_p("AES"), None, 0))
+    try:
+        mode = ctypes.create_unicode_buffer("ChainingModeCBC" if name == "cbc" else "ChainingModeECB")
+        check(bcrypt.BCryptSetProperty(algorithm, ctypes.c_wchar_p("ChainingMode"), mode, ctypes.sizeof(mode), 0))
+        check(bcrypt.BCryptGenerateSymmetricKey(algorithm, ctypes.byref(handle), None, 0, key, len(key), 0))
+        try:
+            if name == "cbc":
+                source, vector, function = data, ctypes.create_string_buffer(iv, 16), bcrypt.BCryptDecrypt
+            else:
+                start = int.from_bytes(iv, "big")
+                blocks = (len(data) + 15) // 16
+                source = b"".join(((start + i) % (1 << 128)).to_bytes(16, "big") for i in range(blocks))
+                vector, function = None, bcrypt.BCryptEncrypt
+            output = ctypes.create_string_buffer(len(source))
+            written = ctypes.c_ulong()
+            check(function(handle, source, len(source), None, vector, 16 if vector is not None else 0,
+                           output, len(source), ctypes.byref(written), 0))
+            result = output.raw[:written.value]
+        finally:
+            bcrypt.BCryptDestroyKey(handle)
+    finally:
+        bcrypt.BCryptCloseAlgorithmProvider(algorithm, 0)
+    if name == "cbc":
+        return result
+    stream = result[:len(data)]
+    return (int.from_bytes(data, "big") ^ int.from_bytes(stream, "big")).to_bytes(len(data), "big")
 
 
 def inflate(data, maximum=MAX_SECTION):
