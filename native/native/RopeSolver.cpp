@@ -495,7 +495,166 @@ void RopeSolver::parameter(std::string_view name, float value) {
     throw std::runtime_error("Unknown original rope parameter: " + std::string(name));
 }
 
+namespace {
+// VMX lanes as the rope solver's helpers compute them (vmaddfp with +0 is a product that
+// turns -0 into +0; with -0 it is a plain product).
+struct V4 { float v[4]; };
+V4 loadV4(uint32_t address) { V4 r; for (unsigned i = 0; i < 4; ++i) r.v[i] = readFloat(address + i * 4); return r; }
+void storeV4(uint32_t address, const V4& a) { for (unsigned i = 0; i < 4; ++i) writeFloat(address + i * 4, a.v[i]); }
+V4 sub(const V4& a, const V4& b) { V4 r; for (unsigned i = 0; i < 4; ++i) r.v[i] = a.v[i] - b.v[i]; return r; }
+V4 add(const V4& a, const V4& b) { V4 r; for (unsigned i = 0; i < 4; ++i) r.v[i] = a.v[i] + b.v[i]; return r; }
+V4 scale(const V4& a, float f) { V4 r; for (unsigned i = 0; i < 4; ++i) r.v[i] = std::fma(a.v[i], f, -0.0f); return r; }
+// 0x0204584c lane 0: products with a +0 addend, then (p0 + p1) + (p2 + p3).
+float dot0(const V4& a) {
+    float p[4];
+    for (unsigned i = 0; i < 4; ++i) p[i] = std::fma(a.v[i], a.v[i], 0.0f);
+    return (p[0] + p[1]) + (p[2] + p[3]);
+}
+float estimate(float s) { return std::bit_cast<float>(cellRsqrtEstimate(std::bit_cast<uint32_t>(s), true)); }
+// 0x02046284: √s from the estimate and one Newton step; s itself when s or the estimate is 0.
+float ropeLength(float s) {
+    const float e = estimate(s), t = std::fma(e, s, 0.0f), h = std::fma(t, 0.5f, 0.0f);
+    if (s == 0 || e == 0) return s;
+    return std::fma(std::fma(-e, t, 1.0f), h, t);
+}
+// 0x0204597c: 1/√s refined once; the estimate if that gives NaN.
+float ropeInverse(float s) {
+    const float e = estimate(s), t = std::fma(e, s, 0.0f), h = std::fma(e, 0.5f, 0.0f);
+    const float r = std::fma(std::fma(-e, t, 1.0f), h, e);
+    return r == r ? r : e;
+}
+// 0x0204ab04: the solver's hash RNG (qgl's Perlin hash) in [-1, 1].
+float ropeRandom(uint32_t& state) {
+    const uint32_t n = ++state, v = (n << 13) ^ n;
+    const uint32_t hash = (v * (v * v * 15731u + 789221u) + 1376312589u) & 0x7fffffffu;
+    return std::fma(float(hash), -9.31322574615478515625e-10f, 1.0f);
+}
+}
+
+// Rope step 0x0204bed0: previous state ← current, time advance (wrapping the deformer at 10),
+// structural and bend springs to the nodes one and two to the left and above, a random
+// perturbation, integration with damping, then the row constraints 0x0204bce0.
 void RopeSolver::step() {
+    std::vector<uint8_t> before;
+    if (verifyNative()) before.assign(vm_base + object, vm_base + 0x01020000);
+    const unsigned W = vm_read32(object + 0x2c), H = vm_read32(object + 0x30), count = W * H;
+    const uint32_t previous = vm_read32(object + 0xa4), current = vm_read32(object + 0xd4), velocity = vm_read32(object + 0x164);
+    std::memmove(vm_base + previous, vm_base + current, size_t(count) * 16);
+    std::vector<V4> P(count), Vel(count);
+    for (unsigned i = 0; i < count; ++i) { P[i] = loadV4(current + i * 16); Vel[i] = loadV4(velocity + i * 16); }
+    const float timestep = readFloat(object + 0x294) * 9.99999975e-05f;
+    float time = timestep + readFloat(object + 0x2c0);
+    writeFloat(object + 0x2c0, time);
+    if (time > 10.0f) {
+        writeFloat(object + 0x2c0, 0.0f);
+        const uint32_t d = vm_read32(object);
+        writeFloat(d + 0xb8, readFloat(d + 0xb4));
+        vm_write8(d + 0x18, 0);
+        writeFloat(d + 0xb4, 0.0f);
+        writeFloat(d + 0x14, 1.0f);
+        vm_write32(d + 0x10, vm_read32(d + 0xc));
+    }
+    const float tension = readFloat(object + 0x27c), bendTension = tension * 10.0f, length = readFloat(object + 0x278);
+    const float perturbation = readFloat(object + 0x298);
+    uint32_t random = vm_read32(object + 0x2d4);
+    const auto spring = [&](unsigned node, unsigned neighbour) {
+        const V4 d = sub(P[neighbour], P[node]);
+        const float strength = (ropeLength(dot0(d)) - length) * tension;
+        const V4 force = scale(scale(d, ropeInverse(dot0(d))), strength);
+        Vel[node] = add(force, Vel[node]);
+        Vel[neighbour] = sub(Vel[neighbour], force);
+    };
+    const auto bend = [&](unsigned node, unsigned neighbour) {
+        const V4 d = sub(P[neighbour], P[node]);
+        const float stretch = std::fma(length, -2.0f, ropeLength(dot0(d)));
+        const V4 force = scale(scale(scale(d, ropeInverse(dot0(d))), stretch), bendTension);
+        Vel[node] = add(force, Vel[node]);
+        Vel[neighbour] = sub(Vel[neighbour], force);
+    };
+    for (unsigned row = 0; row < H; ++row)
+        for (unsigned column = 0; column < W; ++column) {
+            const unsigned node = row * W + column;
+            if (column > 0) spring(node, node - 1);
+            if (column > 1) bend(node, node - 2);
+            if (row > 0) spring(node, node - W);
+            if (row > 1) bend(node, node - 2 * W);
+            const float x = ropeRandom(random), y = ropeRandom(random), z = ropeRandom(random);
+            Vel[node] = add(scale(V4{{x, y, z, 0.0f}}, perturbation), Vel[node]);
+        }
+    vm_write32(object + 0x2d4, random);
+    const float damping = readFloat(object + 0x274) * readFloat(object + 0x294);
+    for (unsigned i = 0; i < count; ++i) {
+        P[i] = add(scale(Vel[i], timestep), P[i]);
+        Vel[i] = sub(Vel[i], scale(Vel[i], damping));
+    }
+    // 0x0204bce0: smoothed time, a push on each row's first node, and each row's last node
+    // pinned to an oscillating point scaled by the end position.
+    const float smoothed = std::fma(readFloat(object + 0x2c0) - readFloat(object + 0x2c4), 0.100000001f, readFloat(object + 0x2c4));
+    writeFloat(object + 0x2c4, smoothed);
+    const float endY = readFloat(object + 0x2a4), endZ = readFloat(object + 0x2a8);
+    for (unsigned row = 0; row < H; ++row) {
+        const float push = readFloat(object + 0x294) * 0.0199999996f;
+        const float t = float(int32_t(row)) / float(int32_t(H)) + smoothed;
+        Vel[row * W] = add(V4{{push, 0.0f, 0.0f, 0.0f}}, Vel[row * W]);
+        const unsigned last = row * W + W - 1;
+        const float y = std::fma(firmwareSinCos(t * 11.0f, 0), 0.5f, 0.5f) * endY;
+        const float z = ((firmwareSinCos(t * 15.0f, 1) + 1.0f) * 0.5f) * endZ;
+        P[last] = V4{{0.0f, y, z, 1.0f}};
+        Vel[last] = V4{{0.0f, 0.0f, 0.0f, 0.0f}};
+    }
+    for (unsigned i = 0; i < count; ++i) { storeV4(current + i * 16, P[i]); storeV4(velocity + i * 16, Vel[i]); }
+    if (!before.empty()) {
+        std::vector<uint8_t> native(vm_base + object, vm_base + 0x01020000);
+        std::memcpy(vm_base + object, before.data(), before.size());
+        stepOriginal();
+        reportDifference("rope step", native.data(), vm_base + object, native.size());
+        std::memcpy(vm_base + object, native.data(), native.size());
+    }
+}
+
+// Rope frame 0x0204f814: fixed 60 Hz steps from the accumulated time, then each node blended
+// between the last two states and scaled in y/z by the deformer's profile along x.
+void RopeSolver::advance(double seconds) {
+    if (!std::isfinite(seconds) || seconds < 0 || seconds > 1)
+        throw std::runtime_error("Invalid original frame interval");
+    std::vector<uint8_t> before;
+    if (verifyNative()) before.assign(vm_base + object, vm_base + 0x01020000);
+    // fmuls on a double operand, as the translation computes it: double product, then single.
+    const float frames = float(seconds * 60.0);
+    float accumulated = readFloat(object + 0x2cc) + frames;
+    writeFloat(object + 0x2d0, frames);
+    writeFloat(object + 0x2cc, accumulated);
+    while (readFloat(object + 0x2cc) > 1.0f) {
+        step();
+        writeFloat(object + 0x2cc, readFloat(object + 0x2cc) - 1.0f);
+    }
+    accumulated = readFloat(object + 0x2cc);
+    const unsigned count = vm_read32(object + 0x2c) * vm_read32(object + 0x30);
+    const uint32_t blended = vm_read32(object + 0x44), previous = vm_read32(object + 0xa4), current = vm_read32(object + 0xd4);
+    const float origin = readFloat(vm_read32(object) + 0xac);
+    for (unsigned i = 0; i < count; ++i) {
+        V4 p = add(scale(loadV4(previous + i * 16), 1.0f - accumulated), scale(loadV4(current + i * 16), accumulated));
+        const float along = p.v[0] - origin;
+        float wave, t;
+        if (along < 0.0f) { wave = firmwareSinCos(0.0f, 1); t = 0.0f; }
+        else { wave = firmwareSinCos(along * 1.57079637f, 1); t = along / 5.0f; }
+        const float clamped = t < 0.0f ? 0.0f : t > 1.0f ? 1.0f : t;
+        const float falloff = (1.0f - clamped) * (1.0f - clamped);
+        const float profile = 1.29999995f - wave * (falloff * std::fma(1.0f - clamped, -2.0f, 3.0f));
+        const V4 factor{{1.0f, profile, profile, 1.0f}};
+        for (unsigned lane = 0; lane < 4; ++lane) p.v[lane] = std::fma(factor.v[lane], p.v[lane], -0.0f);
+        storeV4(blended + i * 16, p);
+    }
+    if (!before.empty()) {
+        std::vector<uint8_t> native(vm_base + object, vm_base + 0x01020000);
+        std::memcpy(vm_base + object, before.data(), before.size());
+        advanceOriginal(seconds);
+        reportDifference("rope frame", native.data(), vm_base + object, native.size());
+        std::memcpy(vm_base + object, native.data(), native.size());
+    }
+}
+
+void RopeSolver::stepOriginal() {
     auto& cpu = state_->cpu;
     cpu.gpr[3] = object;
     const auto savedStack = cpu.gpr[1];
@@ -505,7 +664,7 @@ void RopeSolver::step() {
         throw std::runtime_error("Original solver did not restore its calling convention");
 }
 
-void RopeSolver::advance(double seconds) {
+void RopeSolver::advanceOriginal(double seconds) {
     if (!std::isfinite(seconds) || seconds < 0 || seconds > 1)
         throw std::runtime_error("Invalid original frame interval");
     auto& cpu = state_->cpu;

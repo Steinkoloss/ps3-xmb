@@ -30,7 +30,9 @@ int main(int argc, char** argv) {
         {"particles","Development: construct the original particle system and report.","capacity"},
         {"noise-check","Compare native exposure noise with the original for N frames.","frames"},
         {"sincos-check","Compare native _FSin with the math module for N inputs.","count"},
-        {"expf-check","Compare native expf with the math module for N inputs.","count"}});
+        {"expf-check","Compare native expf with the math module for N inputs.","count"},
+        {"start-time","Development: start the simulation clock here (e.g. near its 10 s wrap).","seconds"},
+        {"jitter","Development: vary the frame interval pseudo-randomly around 1/60 s."}});
     parser.process(app);
     try {
         bool valid;
@@ -103,7 +105,13 @@ int main(int argc, char** argv) {
                 metadata.write(QJsonDocument(QJsonObject{{"model",values}}).toJson()) < 0)
                 throw std::runtime_error("Cannot save original model matrix");
         }
-        for (unsigned frame = 0; frame < frames; ++frame) rope.advance(1.0 / 60.0);
+        if (parser.isSet("start-time")) rope.parameter("TIME", parser.value("start-time").toFloat());
+        uint32_t jitter = 1;
+        for (unsigned frame = 0; frame < frames; ++frame) {
+            double interval = 1.0 / 60.0;
+            if (parser.isSet("jitter")) { jitter = jitter * 1664525u + 1013904223u; interval = (jitter >> 8) / double(1u << 24) * 0.05; }
+            rope.advance(interval);
+        }
         auto nodes = rope.positions();
         QByteArray bytes;
         for (const auto& node : nodes) for (float value : node) {

@@ -53,6 +53,18 @@ class RopeTests(unittest.TestCase):
         self.assertTrue(all(math.isfinite(v) for point in points for v in point))
         self.assertTrue(all(point[3] == 1 for point in points))
 
+    def test_native_rope_matches_the_original_for_varying_intervals_and_the_clock_wrap(self):
+        for extra in (["--jitter"], ["--jitter", "--start-time", "9.999"]):
+            output = self.root / "native.bin"
+            result = subprocess.run([str(Path(os.environ["MOYOU_ROPE_CHECKPOINT"]).resolve()),
+                "--renderer", str(self.core / "renderer-image.bin"), "--math", str(self.core / "math-image.bin"),
+                "--settings", str(self.reference / "lines/LINE1.mnu"),
+                "--settings", str(self.reference / "lines/override/day/LINE1.mnu"),
+                "--frames", "900", "--output", str(output), *extra],
+                capture_output=True, text=True, timeout=600, env=dict(os.environ, MOYOU_VERIFY_NATIVE="1"))
+            self.assertEqual(result.returncode, 0, result.stderr[-2000:])
+            self.assertNotIn("bytes differ", result.stderr)
+
     def test_changed_original_code_and_missing_required_menu_data_fail_before_output(self):
         image = bytearray((self.core / "renderer-image.bin").read_bytes())
         image[0x4bed0] ^= 1

@@ -23,7 +23,9 @@ public:
     void reset(unsigned state);
     void parameter(std::string_view name, float value);
     void step();
+    void stepOriginal();
     void advance(double seconds);
+    void advanceOriginal(double seconds);
     Nodes positions() const;
     float time() const;
     uint32_t randomState() const;
