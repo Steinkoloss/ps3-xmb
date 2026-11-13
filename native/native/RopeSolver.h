@@ -32,6 +32,7 @@ public:
     Matrix multiply(const Matrix& left, const Matrix& right);
     Matrix multiplyOriginal(const Matrix& left, const Matrix& right);
     std::array<Texture, 2> textures();
+    std::array<Texture, 2> texturesOriginal();
     ExposureTables exposure(float exposure, float white, float threshold, float gamma, float dither);
     // Compares native noise with the original exposure update for successive frames.
     bool checkExposureNoise(unsigned frames);

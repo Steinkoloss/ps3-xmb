@@ -972,7 +972,43 @@ std::vector<float> RopeSolver::particleVertices(uint32_t system) const {
     return values;
 }
 
+// 0x0204bad0 (stripe LUT 0x2001, 16 x 4) and 0x0204b928 (encode LUT 0x2002, 4096 x 1).
 std::array<RopeSolver::Texture, 2> RopeSolver::textures() {
+    const auto clampByte = [](float v) { return uint8_t(int32_t(v < 0.0f ? 0.0f : v > 255.0f ? 255.0f : v)); };
+    Texture stripes{16, 4, std::vector<uint8_t>(16 * 4 * 4)};
+    for (unsigned row = 0; row < 4; ++row)
+        for (unsigned column = 0; column < 16; ++column) {
+            const float j = float(row) / 3.0f;
+            const float u = float(column) / float(15) - 0.5f;
+            const float exponent = ((j * 20.0f) * j) * j;
+            const float brightness = std::fma(j, 0.5f, 0.5f);
+            const float base = std::fma(u * -4.0f, u, 1.00999999f);
+            float value = float(std::pow(double(base), double(exponent)) * double(brightness));
+            if (value > 1.0f) value = 1.0f;
+            const auto byte = uint8_t(int32_t(value * 255.0f));
+            for (unsigned channel = 0; channel < 4; ++channel) stripes.rgba[(row * 16 + column) * 4 + channel] = byte;
+        }
+    Texture encode{4096, 1, std::vector<uint8_t>(4096 * 4)};
+    for (unsigned i = 0; i < 4096; ++i) {
+        const double scaled = double((float(int32_t(i)) / 4095.0f) * 32.0f * 4.0f);
+        double whole;
+        const float fraction = float(std::modf(scaled, &whole));
+        const uint8_t low = clampByte((fraction * 0.25f) * 255.0f), high = clampByte((float(whole) * 0.015625f) * 255.0f);
+        encode.rgba[i * 4 + 0] = low; encode.rgba[i * 4 + 1] = high;
+        encode.rgba[i * 4 + 2] = low; encode.rgba[i * 4 + 3] = high;
+    }
+    std::array<Texture, 2> native{stripes, encode};
+    if (!verifyNative()) return native;
+    const auto original = texturesOriginal();
+    for (unsigned i = 0; i < 2; ++i) {
+        if (original[i].width != native[i].width || original[i].height != native[i].height || original[i].rgba.size() != native[i].rgba.size())
+            std::fprintf(stderr, "native textures: %u bytes differ (shape)\n", 1u);
+        else reportDifference(i ? "encode LUT" : "stripe LUT", native[i].rgba.data(), original[i].rgba.data(), native[i].rgba.size());
+    }
+    return native;
+}
+
+std::array<RopeSolver::Texture, 2> RopeSolver::texturesOriginal() {
     heapCursor = heapBase;
     capturedTextures.clear();
     vm_write32(object + 0x14, 0x2001);
