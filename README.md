@@ -21,6 +21,14 @@ download, installs the wallpaper and switches every screen to it. None of Sony's
 part of this project. Already have `PS3UPDAT.PUP` (4.93)? `sh ps3-xmb-installer.run
 PS3UPDAT.PUP` uses it instead. Set `PS3_XMB_KEEP_WALLPAPER=1` to install without switching.
 
+### Windows 10/11
+
+Download `PS3-XMB-Setup.exe` from the Releases page and run it (no administrator rights
+needed). On first start the app asks to download Sony's PS3 system software (about 200 MB,
+from Sony) and takes the renderer's data from it, then draws the background behind the
+desktop icons across all monitors. It pauses while a fullscreen app or game is in front and
+starts with Windows (tray icon: Pause, Start with Windows, Quit).
+
 ### From source
 
 Install the build dependencies (Qt 6.9 or newer), then run `./install.sh` (same options):
