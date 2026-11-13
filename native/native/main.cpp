@@ -97,6 +97,7 @@ int main(int argc, char** argv) {
                        {"screens", "Multi-screen desktop: screen rectangles in millimetres (live scene)", "x,y,w,h;x,y,w,h..."},
                        {"screen", "Which of --screens to render, at --width x --height", "index", "0"},
                        {"scene-axis", "Multi-screen axis: auto (snap within 20 degrees), level or exact", "mode", "auto"},
+                       {"pointer", "Development: sweep the cursor across the canvas in NDC during the run", "x0,y0,x1,y1,first"},
                        {"viewport", "Show only this part of the width x height canvas (live scene)", "x,y,w,h"},
                        {"sequence", "Also save every Nth update as output-NNNNN.png (live scene)", "count", "0"}});
     parser.process(application);
@@ -152,9 +153,22 @@ int main(int argc, char** argv) {
                     if (corners) scene.advance(seconds,sceneCanvas,*corners,size);
                     else scene.advance(seconds,canvas,viewport);
                 };
+                std::optional<std::array<float,5>> sweep;
+                if (parser.isSet("pointer")) {
+                    const auto f = parser.value("pointer").split(',');
+                    if (f.size() != 5) throw std::runtime_error("Invalid --pointer");
+                    sweep = std::array<float,5>{f[0].toFloat(),f[1].toFloat(),f[2].toFloat(),f[3].toFloat(),f[4].toFloat()};
+                }
                 if (!frames) step(0);
                 const auto every = parser.value("sequence").toUInt();
                 for (unsigned i = 0; i < frames; ++i) {
+                    if (sweep) {
+                        // From frame "first" on, the cursor crosses from (x0,y0) to (x1,y1) in one second.
+                        const float t = (float(i) - (*sweep)[4]) / 60.0f;
+                        if (t >= 0 && t <= 1)
+                            scene.setPointer(std::array<float,2>{(*sweep)[0] + t * ((*sweep)[2] - (*sweep)[0]),(*sweep)[1] + t * ((*sweep)[3] - (*sweep)[1])});
+                        else scene.setPointer(std::nullopt);
+                    }
                     step(1.0/60);
                     if (every && (i + 1) % every == 0) {
                         auto name = parser.value("output");

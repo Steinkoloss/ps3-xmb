@@ -3,6 +3,7 @@
 #include "RopeSolver.h"
 #include "SurfaceEvaluator.h"
 #include <future>
+#include <optional>
 #include <map>
 
 // Time-of-day preset blend (0x02011600, table 0x0209c990): each interval between keyframe times
@@ -28,6 +29,9 @@ public:
     ~OriginalSimulation();
     // Preset "clock": re-blend the menus for this hour on the next step.
     void setHour(double hour) { pendingHour_ = hour; }
+    // Cursor on the canvas in NDC (x right, y up), or none: its motion pushes the weave slightly
+    // and the flakes noticeably (not in the firmware).
+    void setPointer(std::optional<std::array<float,2>> pointer) { pointer_ = pointer; }
     Frame step(double seconds, QSize size);
     const Constants& constants() const { return constants_; }
 private:
@@ -36,6 +40,9 @@ private:
     QString reference_, preset_;
     double pendingHour_ = -1, menuHour_ = -1;
     unsigned menus_ = 0;
+    std::optional<std::array<float,2>> pointer_, lastPointer_;
+    RopeSolver::Matrix lastRibbon_{};
+    bool haveRibbon_ = false;
     void requestDeformation(float time);
     void collectDeformation();
     bool deformationPending_ = false;

@@ -1,5 +1,6 @@
 #pragma once
 #include <QQuickFramebufferObject>
+#include <QTimer>
 #include <QtQml/qqmlregistration.h>
 #include <memory>
 #include <mutex>
@@ -71,6 +72,8 @@ protected:
 private:
     void restart();
     void areaChanged();
+    void samplePointer();
+    QTimer pointerTimer_;
     mutable std::mutex areaMutex_;
     QRectF area_;
     std::vector<QMetaObject::Connection> layoutConnections_, screenConnections_;

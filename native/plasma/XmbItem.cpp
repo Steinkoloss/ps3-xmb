@@ -2,6 +2,7 @@
 #include "DesktopLayout.h"
 #include <QTime>
 #include "OriginalScene.h"
+#include <QCursor>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
@@ -88,6 +89,11 @@ public:
         refresh();
     }
     void setHour(double hour) { hour_ = hour; }
+    // Cursor over a subscriber, in desktop millimetres (or none when it is elsewhere).
+    void setPointer(XmbItem* item, std::optional<QPointF> pointer) {
+        std::lock_guard lock(items_);
+        if (subscribers_.count(item)) subscribers_[item].pointer = pointer;
+    }
     void setAxis(SceneAxis axis) { axis_ = axis; refresh(); }
     void fail(const QString& message) {
         std::lock_guard lock(items_);
@@ -95,7 +101,7 @@ public:
             QMetaObject::invokeMethod(item,"fail",Qt::QueuedConnection,Q_ARG(QString,message));
     }
 private:
-    struct Subscriber { QRectF area; bool running = true; };
+    struct Subscriber { QRectF area; bool running = true; std::optional<QPointF> pointer; };
     struct Control { std::mutex mutex; std::condition_variable wake; };
     XmbSimulator(const QString& data, const QString& preset, double hour) :
         channel_(std::make_shared<XmbChannel>()), control_(std::make_shared<Control>()), root_(data), hour_(hour) {
@@ -156,6 +162,14 @@ private:
                 { std::lock_guard lock(canvasMutex_); scene = scene_; }
                 const double fixed = hour_;
                 simulation.setHour(fixed >= 0 ? fixed : QTime::currentTime().msecsSinceStartOfDay() / 3.6e6);
+                {
+                    std::optional<QPointF> pointer;
+                    { std::lock_guard lock(items_); for (const auto& [item, state] : subscribers_) if (state.pointer) pointer = state.pointer; }
+                    if (pointer) {
+                        const auto c = scene.canvas(*pointer);
+                        simulation.setPointer(std::array<float,2>{float(2 * c.x() - 1),float(1 - 2 * c.y())});
+                    } else simulation.setPointer(std::nullopt);
+                }
                 auto frame = std::make_shared<const OriginalSimulation::Frame>(simulation.step(seconds,
                     QSize(std::max(1,int(std::lround(scene.aspect() * 1000))),1000)));
                 {
@@ -305,6 +319,10 @@ private:
 }
 
 XmbItem::XmbItem(QQuickItem* parent) : QQuickFramebufferObject(parent) {
+    // The cursor pushes the scene: sample it every frame while it is over this screen.
+    pointerTimer_.setInterval(16);
+    connect(&pointerTimer_,&QTimer::timeout,this,[this] { samplePointer(); });
+    pointerTimer_.start();
     // The scene graph shows this framebuffer's first row at the top; the original passes render
     // with OpenGL's bottom-up rows (as the preview's captures read them), so mirror it.
     setMirrorVertically(true);
@@ -388,6 +406,16 @@ static QRectF physicalScreen(const QScreen* target) {
 QRectF XmbItem::desktopArea() const {
     std::lock_guard lock(areaMutex_);
     return area_;
+}
+
+void XmbItem::samplePointer() {
+    if (!simulator_ || !window()) return;
+    const QPointF local = mapFromGlobal(QCursor::pos(window()->screen()));
+    std::optional<QPointF> pointer;
+    const auto area = desktopArea();
+    if (!area.isEmpty() && QRectF(QPointF(),size()).contains(local) && width() > 0)
+        pointer = area.topLeft() + QPointF(local.x() / width() * area.width(),local.y() / height() * area.height());
+    simulator_->setPointer(this,pointer);
 }
 
 void XmbItem::areaChanged() {

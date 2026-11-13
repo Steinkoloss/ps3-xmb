@@ -55,6 +55,13 @@ public:
     // Original draw setup 0x0205c254: uniform values for both particle programs.
     ParticleUniforms particleUniforms(uint32_t system);
     std::vector<float> particleVertices(uint32_t system) const;
+    // Pointer interaction (not in the firmware): add velocity to rope nodes (model space) and
+    // to live particles near a cursor moving across the screen. clip: P·V(·M) column-major;
+    // cursor and motion in NDC (y up); radius in NDC height units; aspect = width/height.
+    void nudgeRope(const Matrix& clip, const Matrix& modelFromClip, float x, float y, float dx, float dy,
+                   float aspect, float radius, float strength);
+    void nudgeParticles(uint32_t system, const Matrix& clip, float x, float y, float dx, float dy,
+                        float aspect, float radius, float strength);
     uint32_t guestWord(uint32_t address) const;  // development inspection
     std::vector<uint8_t> guestBytes(uint32_t address, uint32_t size) const;
 private:

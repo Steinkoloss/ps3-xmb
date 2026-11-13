@@ -154,6 +154,22 @@ OriginalSimulation::~OriginalSimulation() {
 }
 
 OriginalSimulation::Frame OriginalSimulation::step(double seconds, QSize size) {
+    // Cursor motion since the last step; a jump (cursor left and re-entered) is not a push.
+    std::array<float,4> push{};   // x, y, dx, dy in NDC
+    bool pushing = false;
+    if (pointer_ && lastPointer_) {
+        const float dx = (*pointer_)[0] - (*lastPointer_)[0], dy = (*pointer_)[1] - (*lastPointer_)[1];
+        pushing = (dx != 0 || dy != 0) && dx * dx + dy * dy < 0.3f * 0.3f;
+        push = {(*pointer_)[0], (*pointer_)[1], dx, dy};
+    }
+    lastPointer_ = pointer_;
+    const float aspect = float(size.width()) / size.height();
+    if (pushing && haveRibbon_) {
+        const auto inverse = QMatrix4x4(lastRibbon_.data()).transposed().inverted().transposed();
+        RopeSolver::Matrix modelFromClip;
+        std::copy_n(inverse.constData(),16,modelFromClip.begin());
+        rope_->nudgeRope(lastRibbon_,modelFromClip,push[0],push[1],push[2],push[3],aspect,0.25f,0.02f);
+    }
     rope_->advance(seconds);
     collectDeformation();
     surface_->lattice(lattice_,scale1_,scale2_,offset_);
@@ -169,6 +185,7 @@ OriginalSimulation::Frame OriginalSimulation::step(double seconds, QSize size) {
     RopeSolver::Matrix p;
     std::copy_n(ribbonProjection.constData(),16,p.begin());
     auto matrix = rope_->multiply(p,model_);
+    lastRibbon_ = matrix; haveRibbon_ = true;
     auto clip = surface_->project(rope_->positions(),matrix);
     auto evaluated = surface_->subdivide(clip);
     Frame frame;
@@ -192,9 +209,11 @@ OriginalSimulation::Frame OriginalSimulation::step(double seconds, QSize size) {
     // Re-blend between particle jobs (they share the particle system); a minute of clock
     // time moves the eased weight by under 1%.
     if (preset_ == "clock" && pendingHour_ >= 0 && std::abs(pendingHour_ - menuHour_) >= 1.0 / 60) applyMenus(pendingHour_);
-    const float aspect = float(size.width()) / size.height();
-    particleJob_ = std::async(std::launch::async,[this,grid = std::move(evaluated),columns,seconds,aspect] {
+    RopeSolver::Matrix particleClip;
+    std::copy_n(projection.constData(),16,particleClip.begin());
+    particleJob_ = std::async(std::launch::async,[this,grid = std::move(evaluated),columns,seconds,aspect,pushing,push,particleClip] {
         rope_->particleFrame(particles_,particleLayer_,grid,128,128,columns,aspect,float(seconds));
+        if (pushing) rope_->nudgeParticles(particles_,particleClip,push[0],push[1],push[2],push[3],aspect,0.18f,0.6f);
         // Development: MOYOU_PARTICLE_DUMP=<path> writes the system and layer for comparison
         // with a running console/emulator (overwritten every frame).
         if (const char* dump = std::getenv("MOYOU_PARTICLE_DUMP")) {

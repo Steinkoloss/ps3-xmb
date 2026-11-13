@@ -783,6 +783,54 @@ RopeSolver::ParticleUniforms RopeSolver::particleUniforms(uint32_t system) {
 
 uint32_t RopeSolver::guestWord(uint32_t address) const { return vm_read32(address); }
 
+namespace {
+// Clip coordinates of a point (column-major matrix) and the cursor falloff at its screen position.
+std::array<float, 4> project(const RopeSolver::Matrix& m, float x, float y, float z) {
+    std::array<float, 4> r{};
+    for (unsigned row = 0; row < 4; ++row) r[row] = m[row] * x + m[4 + row] * y + m[8 + row] * z + m[12 + row];
+    return r;
+}
+float falloff(const std::array<float, 4>& clip, float x, float y, float aspect, float radius) {
+    if (clip[3] <= 1e-4f) return 0;
+    const float u = (clip[0] / clip[3] - x) * aspect, v = clip[1] / clip[3] - y;
+    return std::exp(-(u * u + v * v) / (radius * radius));
+}
+}
+
+void RopeSolver::nudgeRope(const Matrix& clip, const Matrix& modelFromClip, float x, float y, float dx, float dy,
+                           float aspect, float radius, float strength) {
+    // Velocities are array 6 (see reset); a screen-space push becomes a model-space velocity.
+    constexpr uint32_t velocities = arrays + 6 * arrayBytes;
+    for (unsigned node = 0; node < 361; ++node) {
+        const uint32_t p = arrays + node * 16, v = velocities + node * 16;
+        const auto c = project(clip, readFloat(p), readFloat(p + 4), readFloat(p + 8));
+        const float weight = falloff(c, x, y, aspect, radius) * strength;
+        if (weight < 1e-5f) continue;
+        // Clip-space displacement at this depth, mapped back through the inverse transform.
+        const float cx = dx * c[3], cy = dy * c[3];
+        for (unsigned i = 0; i < 3; ++i)
+            writeFloat(v + i * 4, readFloat(v + i * 4) + weight * (modelFromClip[i] * cx + modelFromClip[4 + i] * cy));
+    }
+}
+
+void RopeSolver::nudgeParticles(uint32_t system, const Matrix& clip, float x, float y, float dx, float dy,
+                                float aspect, float radius, float strength) {
+    // Particle records (0x30 bytes): position+life at +0, velocity at +0x10; life -666 is dead.
+    const uint32_t array = vm_read32(vm_read32(system + 0xa4) + 0x10), count = vm_read32(vm_read32(system + 0xa4) + 0x14);
+    // The camera has no rotation (eye on +z looking down -z), so a screen push at clip depth w
+    // is a world displacement of (dx·w/P00, dy·w/P11, 0).
+    const float sx = 1 / clip[0], sy = 1 / clip[5];
+    for (uint32_t i = 0; i < count; ++i) {
+        const uint32_t p = array + i * 0x30, v = p + 0x10;
+        if (readFloat(p + 12) < 0) continue;
+        const auto c = project(clip, readFloat(p), readFloat(p + 4), readFloat(p + 8));
+        const float weight = falloff(c, x, y, aspect, radius) * strength;
+        if (weight < 1e-5f) continue;
+        writeFloat(v, readFloat(v) + weight * dx * c[3] * sx);
+        writeFloat(v + 4, readFloat(v + 4) + weight * dy * c[3] * sy);
+    }
+}
+
 std::vector<uint8_t> RopeSolver::guestBytes(uint32_t address, uint32_t size) const {
     return {vm_base + address, vm_base + address + size};
 }

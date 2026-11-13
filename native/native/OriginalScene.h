@@ -53,6 +53,7 @@ public:
     void render(GLuint target, QSize size) { display_.render(target,size); }
     QImage capture(QSize size) { return display_.capture(size); }
     const std::vector<float>& mesh() const { return frame_.vertices; }
+    void setPointer(std::optional<std::array<float,2>> pointer) { simulation_.setPointer(pointer); }
 private:
     OriginalSimulation simulation_;
     OriginalDisplay display_;
