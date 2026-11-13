@@ -3,7 +3,7 @@
 // behind the desktop icons on Windows (the WorkerW layer that Explorer paints the wallpaper
 // in), with a tray icon. On first start it imports the renderer's data from Sony's PS3 system
 // software (downloaded from Sony unless a PS3UPDAT.PUP is given) with the bundled Python.
-//   ps3-xmb [--window] [--import PS3UPDAT.PUP]
+//   ps3-xmb [--window] [--import PS3UPDAT.PUP] [--snapshot frame.png]
 #include "OriginalScene.h"
 #include <QApplication>
 #include <QCommandLineParser>
@@ -91,7 +91,7 @@ QRect virtualDesktop() {
 
 class Wallpaper final : public QOpenGLWindow {
 public:
-    explicit Wallpaper(QString data) : data_(std::move(data)) {}
+    explicit Wallpaper(QString data, QString snapshot = {}) : data_(std::move(data)), snapshot_(std::move(snapshot)) {}
     ~Wallpaper() override { makeCurrent(); scene_.reset(); doneCurrent(); }
     void setPaused(bool paused) {
         if (paused == paused_) return;
@@ -127,6 +127,11 @@ private:
             scene_->advance(std::min(0.25, clock_.nsecsElapsed() / 1e9), size);
             clock_.restart();
             scene_->render(defaultFramebufferObject(), size);
+            // Testing: save the 300th frame (about five seconds in) and quit.
+            if (!snapshot_.isEmpty() && ++frames_ == 300) {
+                grabFramebuffer().save(snapshot_);
+                QTimer::singleShot(0, qApp, &QApplication::quit);
+            }
         } catch (const std::exception& error) {
             scene_.reset();
             QMessageBox::critical(nullptr, "PS3 XMB", QString("The wallpaper stopped:\n%1").arg(error.what()));
@@ -135,7 +140,8 @@ private:
         }
         if (!paused_) update();
     }
-    QString data_;
+    QString data_, snapshot_;
+    unsigned frames_ = 0;
     std::unique_ptr<OriginalScene> scene_;
     QElapsedTimer clock_, minutes_;
     bool paused_ = false;
@@ -264,7 +270,8 @@ int main(int argc, char** argv) {
     parser.setApplicationDescription("PS3 XMB wave background as the desktop wallpaper.");
     parser.addHelpOption();
     parser.addOptions({{"window", "Show in a normal window instead of behind the desktop icons"},
-                       {"import", "Import from this PS3UPDAT.PUP instead of downloading", "file"}});
+                       {"import", "Import from this PS3UPDAT.PUP instead of downloading", "file"},
+                       {"snapshot", "Testing: save the 300th frame to this PNG file and quit", "file"}});
     parser.process(application);
 
     QLockFile lock(QDir(QDir::tempPath()).filePath("ps3-xmb.lock"));
@@ -276,7 +283,7 @@ int main(int argc, char** argv) {
         if (!startsWithWindows()) setStartWithWindows(true);   // default on, switch off in the tray
     }
 
-    Wallpaper wallpaper(dataDirectory());
+    Wallpaper wallpaper(dataDirectory(), parser.value("snapshot"));
     const QRect desktop = virtualDesktop();
 #ifdef _WIN32
     const auto layer = parser.isSet("window") ? DesktopLayer{} : desktopLayer();
