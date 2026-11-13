@@ -106,6 +106,13 @@ void drain(ppu_context* ctx) {
         next(ctx);
     }
 }
+// The math module's expf, pow, floorf and modf run natively (bit-identical over the live
+// scene: mesh, particle arena and image); MOYOU_LIBM=original runs the firmware's.
+float firmwareSinCos(float x, int which);
+bool nativeLibm(const char*) {
+    static const bool original = std::getenv("MOYOU_LIBM") && !std::strcmp(std::getenv("MOYOU_LIBM"), "original");
+    return !original;
+}
 void firmwareMath(ppu_context* ctx, void (*function)(ppu_context*)) {
     const auto toc = ctx->gpr[2], savedStack = ctx->gpr[1];
     ctx->gpr[2] = 0x006f5558;
@@ -234,11 +241,24 @@ void ps3_hle_call(unsigned nid, ppu_context* ctx) {
         std::memcpy(vm_base + ctx->gpr[3], vm_base + ctx->gpr[4], size);
         return;
     }
-    case 0xb5e28191: firmwareMath(ctx, moyou_math_func_00095F60); return;
-    case 0x38e69f09: firmwareMath(ctx, moyou_math_func_00093F94); return;
-    case 0xa713f8cf: firmwareMath(ctx, moyou_math_func_00093B38); return;
-    case 0xfcf08193: firmwareMath(ctx, moyou_math_func_00092D34); return;
-    case 0x23b985f7: firmwareMath(ctx, moyou_math_func_00092E90); return;
+    case 0xb5e28191:   // _FSin(float, which)
+        if (nativeLibm("sin")) { ctx->fpr[1] = firmwareSinCos(float(ctx->fpr[1]), int(ctx->gpr[4])); return; }
+        firmwareMath(ctx, moyou_math_func_00095F60); return;
+    case 0x38e69f09:   // pow
+        if (nativeLibm("pow")) { ctx->fpr[1] = std::pow(ctx->fpr[1], ctx->fpr[2]); return; }
+        firmwareMath(ctx, moyou_math_func_00093F94); return;
+    case 0xa713f8cf:   // modf(double, double*): the double takes r3's slot (PPC64 ABI), the pointer is r4
+        if (nativeLibm("modf")) {
+            double whole; ctx->fpr[1] = std::modf(ctx->fpr[1], &whole);
+            vm_write64(uint32_t(ctx->gpr[4]), std::bit_cast<uint64_t>(whole)); return;
+        }
+        firmwareMath(ctx, moyou_math_func_00093B38); return;
+    case 0xfcf08193:   // expf
+        if (nativeLibm("expf")) { ctx->fpr[1] = std::exp(float(ctx->fpr[1])); return; }
+        firmwareMath(ctx, moyou_math_func_00092D34); return;
+    case 0x23b985f7:   // floorf
+        if (nativeLibm("floorf")) { ctx->fpr[1] = std::floor(float(ctx->fpr[1])); return; }
+        firmwareMath(ctx, moyou_math_func_00092E90); return;
     case 0xffff0003: {
         const auto bytes = ctx->gpr[4];
         if (bytes > 0x100000 || heapCursor + bytes > 0x01500000)
@@ -783,6 +803,32 @@ RopeSolver::ParticleUniforms RopeSolver::particleUniforms(uint32_t system) {
 
 uint32_t RopeSolver::guestWord(uint32_t address) const { return vm_read32(address); }
 
+unsigned RopeSolver::checkSinCos(unsigned samples) {
+    // Native _FSin against the math module's for random bit patterns plus edge cases.
+    auto& cpu = state_->cpu;
+    unsigned differences = 0;
+    uint32_t seed = 12345;
+    const auto check = [&](float x, int which) {
+        if (std::isinf(x)) return;   // the module raises an FP exception there (unadapted)
+        cpu.fpr[1] = x; cpu.gpr[4] = uint64_t(which);
+        firmwareMath(&cpu, moyou_math_func_00095F60);
+        const float original = float(cpu.fpr[1]), native = firmwareSinCos(x, which);
+        if (std::bit_cast<uint32_t>(original) != std::bit_cast<uint32_t>(native) && !(original != original && native != native)) {
+            if (differences++ < 8) std::fprintf(stderr, "_FSin(%a, %d): original %a native %a\n", x, which, original, native);
+        }
+    };
+    for (float x : {0.0f, -0.0f, 1e-40f, -1e-40f, 40.7f, -40.7f, 40.700001f, 1e6f, -1e9f, 3.4e38f,
+                    std::bit_cast<float>(0x7fc00001u)})
+        for (int which : {0, 1}) check(x, which);
+    for (unsigned i = 0; i < samples; ++i) {
+        seed = seed * 1664525u + 1013904223u;
+        // Mostly moderate magnitudes (the scene's phases), some arbitrary bit patterns.
+        const float x = i % 4 ? float(int32_t(seed)) / float(1u << (seed % 31)) : std::bit_cast<float>(seed);
+        check(x, int(i & 1));
+    }
+    return differences;
+}
+
 namespace {
 // Clip coordinates of a point (column-major matrix) and the cursor falloff at its screen position.
 std::array<float, 4> project(const RopeSolver::Matrix& m, float x, float y, float z) {
@@ -978,7 +1024,8 @@ RopeSolver::GlareWeights RopeSolver::glareWeights(Vector radii, float sumPower, 
     float sum = 0;
     for (unsigned i = 0; i < 6; ++i) {
         cpu.fpr[1] = sumPower; cpu.fpr[2] = i;
-        firmwareMath(&cpu,moyou_math_func_00093F94);
+        if (nativeLibm("pow")) cpu.fpr[1] = std::pow(double(sumPower), double(i));
+        else firmwareMath(&cpu,moyou_math_func_00093F94);
         result.levels[i] = static_cast<float>(cpu.fpr[1]);
         sum = static_cast<float>(double(sum) + cpu.fpr[1]);
     }
@@ -1080,12 +1127,16 @@ uint16_t half(float value) {
     if (int32_t(e) > 0x8e) h = 0x7c00;
     return uint16_t((h & 0x7fff) | ((x >> 16) & 0x8000));
 }
-// Math module 0x95f60 (sine for which = 0, cosine for 1): quadrant n from x * 2/pi,
-// two-part reduction, single-precision fused polynomials. NaN for the inputs it routes
-// elsewhere (zero classes, non-finite, |x| > 40.7), which the caller sends to the original.
+// Math module 0x95f60 (_FSin; sine for which = 0, cosine for 1). Classified first (0x95ad8):
+// NaN returns itself, infinity the default NaN, zero returns itself (sine) or 1 (cosine).
+// |x| > 40.7 is first reduced with the module's fmodf (0x93284, exact, so equal to IEEE
+// fmodf) by 2π in single precision. Then quadrant n from x * 2/π, two-part reduction,
+// single-precision fused polynomials.
 float firmwareSinCos(float x, int which) {
-    if (std::fpclassify(x) != FP_NORMAL || double(x) < -40.7 || double(x) > 40.7)
-        return std::numeric_limits<float>::quiet_NaN();
+    if (x != x) return x;
+    if (std::isinf(x)) return std::bit_cast<float>(0x7fc00000u);
+    if (x == 0) return which ? 1.0f : x;
+    if (double(x) < -40.7 || double(x) > 40.7) x = std::fmod(x, 6.2831854820251465f);
     const float scaled = x * 0.6366197467f;
     const int n = int(scaled > 0.0f ? scaled + 0.5f : scaled - 0.5f);
     const unsigned quadrant = unsigned((n & 3) + which);
@@ -1138,13 +1189,7 @@ void RopeSolver::particleUpdate(uint32_t system) {
                          1.0f * (1.0f / readFloat(S + 0x8b8)), 1.0f * (1.0f / readFloat(S + 0x8bc))}};
     (void)invStep;
     uint32_t seeds[3] = {0x98756161u, 0x21324889u, 0x82181158u};
-    const auto sincos = [&](float x, int which) {
-        const float native = firmwareSinCos(x, which);
-        if (native == native) return native;
-        cpu.fpr[1] = x; cpu.gpr[4] = uint64_t(which);       // unusual inputs: translated original
-        moyou_rope_func_02087B50(&cpu); drain(&cpu);
-        return float(cpu.fpr[1]);
-    };
+    const auto sincos = [&](float x, int which) { return firmwareSinCos(x, which); };
     const uint32_t array = vm_read32(vm_read32(system + 0xa4) + 0x10), count = vm_read32(vm_read32(system + 0xa4) + 0x14);
     const auto S0 = withW(loadLanes(S), 0.0f), S10 = loadLanes(S + 0x10), S890 = loadLanes(S + 0x890);
     const auto step = loadLanes(S + 0x8b0), pivot = withW(loadLanes(S + 0x830), 1.0f);
