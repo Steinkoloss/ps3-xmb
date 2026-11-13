@@ -9,6 +9,7 @@
 #include <QCommandLineParser>
 #include <QCursor>
 #include <QDate>
+#include <QDateTime>
 #include <QDialog>
 #include <QDir>
 #include <QElapsedTimer>
@@ -18,6 +19,7 @@
 #include <QLockFile>
 #include <QMenu>
 #include <QMessageBox>
+#include <QOpenGLFunctions>
 #include <QOpenGLWindow>
 #include <QPainter>
 #include <QPainterPath>
@@ -29,6 +31,7 @@
 #include <QSettings>
 #include <QStandardPaths>
 #include <QSurfaceFormat>
+#include <QSysInfo>
 #include <QSystemTrayIcon>
 #include <QTime>
 #include <QTimer>
@@ -44,6 +47,15 @@ QString dataDirectory() {
 }
 bool imported() { return QFile::exists(QDir(dataDirectory()).filePath("cpu/renderer-image.bin")); }
 double hourNow() { return QTime::currentTime().msecsSinceStartOfDay() / 3.6e6; }
+
+// Qt messages and errors go to ps3-xmb.log in the data directory (for problem reports).
+void logMessage(QtMsgType, const QMessageLogContext&, const QString& message) {
+    QDir().mkpath(dataDirectory());
+    QFile log(QDir(dataDirectory()).filePath("ps3-xmb.log"));
+    if (log.size() > (1 << 20)) log.remove();
+    if (log.open(QIODevice::Append | QIODevice::Text))
+        log.write((QDateTime::currentDateTime().toString(Qt::ISODate) + " " + message + "\n").toUtf8());
+}
 
 #ifdef _WIN32
 // The window Explorer paints the wallpaper in, behind the icons. Asking Progman for 0x052C
@@ -102,11 +114,15 @@ public:
 private:
     void initializeGL() override {
         try {
+            auto* gl = QOpenGLContext::currentContext()->functions();
+            qInfo("OpenGL %s, %s, %s", reinterpret_cast<const char*>(gl->glGetString(GL_VERSION)),
+                  reinterpret_cast<const char*>(gl->glGetString(GL_RENDERER)), reinterpret_cast<const char*>(gl->glGetString(GL_VENDOR)));
             const QDir data(data_);
             scene_ = std::make_unique<OriginalScene>(data.filePath("shaders"), data.filePath("reference"),
                 data.filePath("cpu"), QString(), "clock", unsigned(QDate::currentDate().month()), hourNow());
             clock_.start();
         } catch (const std::exception& error) {
+            qCritical("Could not start: %s", error.what());
             QMessageBox::critical(nullptr, "PS3 XMB", QString("The wallpaper could not start:\n%1").arg(error.what()));
             QApplication::exit(1);
         }
@@ -134,6 +150,7 @@ private:
             }
         } catch (const std::exception& error) {
             scene_.reset();
+            qCritical("Stopped: %s", error.what());
             QMessageBox::critical(nullptr, "PS3 XMB", QString("The wallpaper stopped:\n%1").arg(error.what()));
             QApplication::exit(1);
             return;
@@ -263,8 +280,10 @@ int main(int argc, char** argv) {
     format.setProfile(QSurfaceFormat::CoreProfile);
     format.setSwapInterval(1);
     QSurfaceFormat::setDefaultFormat(format);
+    qInstallMessageHandler(logMessage);
     QApplication application(argc, argv);
     application.setApplicationName("PS3 XMB");
+    qInfo("PS3 XMB starting (%s)", qPrintable(QSysInfo::prettyProductName()));
     application.setQuitOnLastWindowClosed(false);
     QCommandLineParser parser;
     parser.setApplicationDescription("PS3 XMB wave background as the desktop wallpaper.");
