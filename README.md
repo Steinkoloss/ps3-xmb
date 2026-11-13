@@ -41,7 +41,6 @@ Exact angle). It follows layout changes live. Settings are shared by all screens
 ## Development
 
 - `native/` — renderer (Qt/OpenGL), firmware import and shader translation tools, tests.
-- `player/` — offline HTML player for a captured 1080p clip of the real console.
 
 Firmware data and every file derived from it stay in `build/` (ignored). Do not commit them.
 
@@ -90,5 +89,5 @@ native/check.sh
 GPL-2.0-or-later (see `LICENSE`). Parts from other projects keep their notices:
 `native/native/CellEstimate.h` (RPCS3, GPL-2.0-or-later), `native/native/SpuEstimate.h`
 (after ps3recomp, MIT), `native/tools/sce.py` (format and public keys after RPCS3,
-GPL-2.0-or-later), `player/assets` (see `player/assets/THIRD_PARTY_LICENSE`). Firmware data
+GPL-2.0-or-later). Firmware data
 is not included and is not covered by this license; users supply their own update file.
