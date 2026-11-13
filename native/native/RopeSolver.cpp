@@ -111,6 +111,9 @@ void drain(ppu_context* ctx) {
 float firmwareSinCos(float x, int which);
 float firmwareExp(float x);
 double firmwarePowInteger(double x, unsigned n);
+float vmaxf(float x, float y);
+float vminf(float x, float y);
+void particleLayerFrame(uint32_t layer);
 bool verifyNative();
 void reportDifference(const char* name, const void* native, const void* original, size_t bytes);
 bool nativeLibm(const char*) {
@@ -174,6 +177,32 @@ RopeSolver::Matrix lookAt(const float* eye, const float* target, const float* up
     u[0] = s[1]*f[2]-s[2]*f[1]; u[1] = s[2]*f[0]-s[0]*f[2]; u[2] = s[0]*f[1]-s[1]*f[0];
     const auto dot = [](const float* a, const float* b) { return a[0]*b[0]+a[1]*b[1]+a[2]*b[2]; };
     return {s[0],u[0],-f[0],0, s[1],u[1],-f[1],0, s[2],u[2],-f[2],0, -dot(s,eye),-dot(u,eye),dot(f,eye),1};
+}
+// Matrix4 inverse (general cofactor inverse; qgl's own is not available): column-major.
+RopeSolver::Matrix inverseMatrix(uint32_t source) {
+        double m[16], r[16];
+    for (unsigned i = 0; i < 16; ++i) m[i] = readFloat(source + i * 4);
+    r[0] = m[5]*m[10]*m[15]-m[5]*m[11]*m[14]-m[9]*m[6]*m[15]+m[9]*m[7]*m[14]+m[13]*m[6]*m[11]-m[13]*m[7]*m[10];
+    r[4] = -m[4]*m[10]*m[15]+m[4]*m[11]*m[14]+m[8]*m[6]*m[15]-m[8]*m[7]*m[14]-m[12]*m[6]*m[11]+m[12]*m[7]*m[10];
+    r[8] = m[4]*m[9]*m[15]-m[4]*m[11]*m[13]-m[8]*m[5]*m[15]+m[8]*m[7]*m[13]+m[12]*m[5]*m[11]-m[12]*m[7]*m[9];
+    r[12] = -m[4]*m[9]*m[14]+m[4]*m[10]*m[13]+m[8]*m[5]*m[14]-m[8]*m[6]*m[13]-m[12]*m[5]*m[10]+m[12]*m[6]*m[9];
+    r[1] = -m[1]*m[10]*m[15]+m[1]*m[11]*m[14]+m[9]*m[2]*m[15]-m[9]*m[3]*m[14]-m[13]*m[2]*m[11]+m[13]*m[3]*m[10];
+    r[5] = m[0]*m[10]*m[15]-m[0]*m[11]*m[14]-m[8]*m[2]*m[15]+m[8]*m[3]*m[14]+m[12]*m[2]*m[11]-m[12]*m[3]*m[10];
+    r[9] = -m[0]*m[9]*m[15]+m[0]*m[11]*m[13]+m[8]*m[1]*m[15]-m[8]*m[3]*m[13]-m[12]*m[1]*m[11]+m[12]*m[3]*m[9];
+    r[13] = m[0]*m[9]*m[14]-m[0]*m[10]*m[13]-m[8]*m[1]*m[14]+m[8]*m[2]*m[13]+m[12]*m[1]*m[10]-m[12]*m[2]*m[9];
+    r[2] = m[1]*m[6]*m[15]-m[1]*m[7]*m[14]-m[5]*m[2]*m[15]+m[5]*m[3]*m[14]+m[13]*m[2]*m[7]-m[13]*m[3]*m[6];
+    r[6] = -m[0]*m[6]*m[15]+m[0]*m[7]*m[14]+m[4]*m[2]*m[15]-m[4]*m[3]*m[14]-m[12]*m[2]*m[7]+m[12]*m[3]*m[6];
+    r[10] = m[0]*m[5]*m[15]-m[0]*m[7]*m[13]-m[4]*m[1]*m[15]+m[4]*m[3]*m[13]+m[12]*m[1]*m[7]-m[12]*m[3]*m[5];
+    r[14] = -m[0]*m[5]*m[14]+m[0]*m[6]*m[13]+m[4]*m[1]*m[14]-m[4]*m[2]*m[13]-m[12]*m[1]*m[6]+m[12]*m[2]*m[5];
+    r[3] = -m[1]*m[6]*m[11]+m[1]*m[7]*m[10]+m[5]*m[2]*m[11]-m[5]*m[3]*m[10]-m[9]*m[2]*m[7]+m[9]*m[3]*m[6];
+    r[7] = m[0]*m[6]*m[11]-m[0]*m[7]*m[10]-m[4]*m[2]*m[11]+m[4]*m[3]*m[10]+m[8]*m[2]*m[7]-m[8]*m[3]*m[6];
+    r[11] = -m[0]*m[5]*m[11]+m[0]*m[7]*m[9]+m[4]*m[1]*m[11]-m[4]*m[3]*m[9]-m[8]*m[1]*m[7]+m[8]*m[3]*m[5];
+    r[15] = m[0]*m[5]*m[10]-m[0]*m[6]*m[9]-m[4]*m[1]*m[10]+m[4]*m[2]*m[9]+m[8]*m[1]*m[6]-m[8]*m[2]*m[5];
+    const double det = m[0]*r[0]+m[1]*r[4]+m[2]*r[8]+m[3]*r[12];
+    if (det == 0 || !std::isfinite(det)) throw std::runtime_error("Singular original matrix inverse");
+    RopeSolver::Matrix result;
+    for (unsigned i = 0; i < 16; ++i) result[i] = float(r[i] / det);
+    return result;
 }
 constexpr uint32_t nativeAllocate = 0x01fe0000;   // fake RSX memory manager method
 void ps3_indirect_call(ppu_context* ctx) {
@@ -357,29 +386,10 @@ void ps3_hle_call(unsigned nid, ppu_context* ctx) {
         check(ctx->gpr[3] + 0x10, 64, true); check(ctx->gpr[4], 64);
         std::memcpy(vm_base + ctx->gpr[3] + 0x10, vm_base + ctx->gpr[4], 64);
         return;
-    case 0x0e428679: {                  // Matrix4 inverse (general cofactor inverse; qgl's own is not available)
+    case 0x0e428679: {                  // Matrix4 inverse
         check(ctx->gpr[3], 64, true); check(ctx->gpr[4], 64);
-        double m[16], r[16];
-        for (unsigned i = 0; i < 16; ++i) m[i] = readFloat(ctx->gpr[4] + i * 4);
-        r[0] = m[5]*m[10]*m[15]-m[5]*m[11]*m[14]-m[9]*m[6]*m[15]+m[9]*m[7]*m[14]+m[13]*m[6]*m[11]-m[13]*m[7]*m[10];
-        r[4] = -m[4]*m[10]*m[15]+m[4]*m[11]*m[14]+m[8]*m[6]*m[15]-m[8]*m[7]*m[14]-m[12]*m[6]*m[11]+m[12]*m[7]*m[10];
-        r[8] = m[4]*m[9]*m[15]-m[4]*m[11]*m[13]-m[8]*m[5]*m[15]+m[8]*m[7]*m[13]+m[12]*m[5]*m[11]-m[12]*m[7]*m[9];
-        r[12] = -m[4]*m[9]*m[14]+m[4]*m[10]*m[13]+m[8]*m[5]*m[14]-m[8]*m[6]*m[13]-m[12]*m[5]*m[10]+m[12]*m[6]*m[9];
-        r[1] = -m[1]*m[10]*m[15]+m[1]*m[11]*m[14]+m[9]*m[2]*m[15]-m[9]*m[3]*m[14]-m[13]*m[2]*m[11]+m[13]*m[3]*m[10];
-        r[5] = m[0]*m[10]*m[15]-m[0]*m[11]*m[14]-m[8]*m[2]*m[15]+m[8]*m[3]*m[14]+m[12]*m[2]*m[11]-m[12]*m[3]*m[10];
-        r[9] = -m[0]*m[9]*m[15]+m[0]*m[11]*m[13]+m[8]*m[1]*m[15]-m[8]*m[3]*m[13]-m[12]*m[1]*m[11]+m[12]*m[3]*m[9];
-        r[13] = m[0]*m[9]*m[14]-m[0]*m[10]*m[13]-m[8]*m[1]*m[14]+m[8]*m[2]*m[13]+m[12]*m[1]*m[10]-m[12]*m[2]*m[9];
-        r[2] = m[1]*m[6]*m[15]-m[1]*m[7]*m[14]-m[5]*m[2]*m[15]+m[5]*m[3]*m[14]+m[13]*m[2]*m[7]-m[13]*m[3]*m[6];
-        r[6] = -m[0]*m[6]*m[15]+m[0]*m[7]*m[14]+m[4]*m[2]*m[15]-m[4]*m[3]*m[14]-m[12]*m[2]*m[7]+m[12]*m[3]*m[6];
-        r[10] = m[0]*m[5]*m[15]-m[0]*m[7]*m[13]-m[4]*m[1]*m[15]+m[4]*m[3]*m[13]+m[12]*m[1]*m[7]-m[12]*m[3]*m[5];
-        r[14] = -m[0]*m[5]*m[14]+m[0]*m[6]*m[13]+m[4]*m[1]*m[14]-m[4]*m[2]*m[13]-m[12]*m[1]*m[6]+m[12]*m[2]*m[5];
-        r[3] = -m[1]*m[6]*m[11]+m[1]*m[7]*m[10]+m[5]*m[2]*m[11]-m[5]*m[3]*m[10]-m[9]*m[2]*m[7]+m[9]*m[3]*m[6];
-        r[7] = m[0]*m[6]*m[11]-m[0]*m[7]*m[10]-m[4]*m[2]*m[11]+m[4]*m[3]*m[10]+m[8]*m[2]*m[7]-m[8]*m[3]*m[6];
-        r[11] = -m[0]*m[5]*m[11]+m[0]*m[7]*m[9]+m[4]*m[1]*m[11]-m[4]*m[3]*m[9]-m[8]*m[1]*m[7]+m[8]*m[3]*m[5];
-        r[15] = m[0]*m[5]*m[10]-m[0]*m[6]*m[9]-m[4]*m[1]*m[10]+m[4]*m[2]*m[9]+m[8]*m[1]*m[6]-m[8]*m[2]*m[5];
-        const double det = m[0]*r[0]+m[1]*r[4]+m[2]*r[8]+m[3]*r[12];
-        if (det == 0 || !std::isfinite(det)) throw std::runtime_error("Singular original matrix inverse");
-        for (unsigned i = 0; i < 16; ++i) writeFloat(ctx->gpr[3] + i * 4, float(r[i] / det));
+        const auto inverse = inverseMatrix(uint32_t(ctx->gpr[4]));
+        for (unsigned i = 0; i < 16; ++i) writeFloat(ctx->gpr[3] + i * 4, inverse[i]);
         return;
     }
     // Particle draw submission (texture/vertex binding, state, draw): the native renderer draws.
@@ -937,9 +947,35 @@ unsigned RopeSolver::particleFrame(uint32_t system, uint32_t layer, const std::v
     vm_write32(layer + 0x48, height);
     for (unsigned i = 0; i < 16; ++i) writeFloat(layer + 0x50 + i * 4, columns[i]);
     auto& cpu = state_->particleCpu;
-    cpu.gpr[3] = layer;
-    cpu.fpr[1] = seconds;
-    moyou_rope_func_02031494(&cpu); drain(&cpu);   // frame logic, simulation inputs, emitter
+    // The native layer frame (particleLayerFrame) is not verified yet: opt in with
+    // MOYOU_PARTICLE_FRAME=native (plus MOYOU_VERIFY_NATIVE=1 to compare). See HANDOVER.md.
+    const char* frameMode = std::getenv("MOYOU_PARTICLE_FRAME");
+    const bool nativeFrame = frameMode && !std::strcmp(frameMode, "native");
+    if (!nativeFrame) {
+        cpu.gpr[3] = layer;
+        cpu.fpr[1] = seconds;
+        moyou_rope_func_02031494(&cpu); drain(&cpu);   // frame logic, simulation inputs, emitter
+    } else if (verifyNative()) {
+        // The original from a snapshot (arena, allocator, qgl RNG), then the native frame from the
+        // same state; arena bytes, allocator and RNG must agree.
+        const std::vector<uint8_t> before(vm_base + particleBase, vm_base + particleEnd);
+        const auto blocks = particleBlocks, holes = particleFree;
+        const auto cursor = particleCursor, random = ::randomState;
+        cpu.gpr[3] = layer;
+        cpu.fpr[1] = seconds;
+        moyou_rope_func_02031494(&cpu); drain(&cpu);
+        const std::vector<uint8_t> original(vm_base + particleBase, vm_base + particleEnd);
+        const auto originalBlocks = particleBlocks, originalHoles = particleFree;
+        const auto originalCursor = particleCursor, originalRandom = ::randomState;
+        std::memcpy(vm_base + particleBase, before.data(), before.size());
+        particleBlocks = blocks; particleFree = holes; particleCursor = cursor; ::randomState = random;
+        particleLayerFrame(layer);
+        reportDifference("particle frame", vm_base + particleBase, original.data(), original.size());
+        if (particleBlocks != originalBlocks || particleFree != originalHoles || particleCursor != originalCursor)
+            std::fprintf(stderr, "native particle frame: 1 bytes differ (allocator)\n");
+        if (::randomState != originalRandom)
+            std::fprintf(stderr, "native particle frame: 4 bytes differ (random state %u vs %u)\n", ::randomState, originalRandom);
+    } else particleLayerFrame(layer);
     ++ticks;
     // 0x02031f44 → 0x0205de2c(system, camera FOV): the field takes the camera's FOV
     // (0x02023ed8 reads camera+0x20; 0.925 on a running XMB), then the PPU update path runs.
@@ -1427,6 +1463,307 @@ RopeSolver::GlareWeights RopeSolver::glareWeights(Vector radii, float sumPower, 
     }
     for (auto& weight : result.levels) weight = static_cast<float>(double(weight) / sum) * level * level;
     return result;
+}
+
+
+namespace {
+// ---- Native particle layer frame ------------------------------------------------------
+V4 v4(float x, float y, float z, float w) { return V4{{x, y, z, w}}; }
+V4 fmaLanes(const V4& a, const V4& b, const V4& c) { V4 r; for (unsigned i = 0; i < 4; ++i) r.v[i] = std::fma(a.v[i], b.v[i], c.v[i]); return r; }
+V4 fmaLanes(const V4& a, float b, const V4& c) { V4 r; for (unsigned i = 0; i < 4; ++i) r.v[i] = std::fma(a.v[i], b, c.v[i]); return r; }
+const V4 negativeZero = v4(-0.0f, -0.0f, -0.0f, -0.0f), positiveZero = v4(0.0f, 0.0f, 0.0f, 0.0f);
+// Lane 0 of the firmware's horizontal sum of a·b products (+0 addend).
+float dotSum(const V4& a, const V4& b) {
+    float p[4];
+    for (unsigned i = 0; i < 4; ++i) p[i] = std::fma(a.v[i], b.v[i], 0.0f);
+    return (p[0] + p[1]) + (p[2] + p[3]);
+}
+float clampFirmware(float x, float lo, float hi) { return x < lo ? lo : x > hi ? hi : x; }  // 0x020030a0
+float atLeast(float value, float minimum) { return value < minimum ? minimum : value; }     // 0x0202b46c
+
+// 0x0202d6e8/0x0202d640: the emission grid vertex (u mod W, v mod H) through the grid matrix.
+V4 sampleGrid(uint32_t layer, int32_t u, int32_t v) {
+    const auto W = int32_t(vm_read32(layer + 0x44)), H = int32_t(vm_read32(layer + 0x48));
+    int32_t uu = u % W, vv = v - (v / H) * H;
+    if (uu < 0) uu += W;
+    if (vv < 0) vv += H;
+    const uint32_t grid = vm_read32(layer + 0x40);
+    if (!grid) return positiveZero;
+    const V4 vertex = loadV4(grid + uint32_t(uu + vv * W) * 32);
+    float m[16];
+    for (unsigned i = 0; i < 16; ++i) m[i] = readFloat(layer + 0x50 + i * 4);
+    const auto r = transform(m, vertex.v);
+    return v4(r[0], r[1], r[2], r[3]);
+}
+
+// 0x0202d780: std::vector<{float4, int u, int v}>::push_back (32-byte slots, 24 bytes copied;
+// growth by half the capacity) with the firmware's new/delete in the particle arena.
+void pushPoint(uint32_t vector, const V4& position, int32_t u, int32_t v) {
+    const uint32_t begin = vm_read32(vector + 4), end = vm_read32(vector + 8), capacity = vm_read32(vector + 0xc);
+    const auto put = [&](uint32_t at, const V4& p, uint32_t a, uint32_t b) { storeV4(at, p); vm_write32(at + 0x10, a); vm_write32(at + 0x14, b); };
+    uint32_t bytes;
+    if (begin) {
+        const uint32_t size = uint32_t(int32_t(end - begin) >> 5), slots = uint32_t(int32_t(capacity - begin) >> 5);
+        if (slots > size) { put(end, position, uint32_t(u), uint32_t(v)); vm_write32(vector + 8, end + 32); return; }
+        if (size == 0x7ffffff) throw std::runtime_error("Original emission list too long");
+        const uint32_t half = slots >> 1;
+        const uint32_t grown = 0x7ffffffu - half >= slots ? slots + half : 0;
+        bytes = (size + 1 > grown ? size + 1 : grown) << 5;
+    } else bytes = 32;
+    const uint32_t block = particleAllocate(bytes & ~31u, 16);
+    uint32_t at = block;
+    for (uint32_t source = begin; source != end; source += 32, at += 32)
+        put(at, loadV4(source), vm_read32(source + 0x10), vm_read32(source + 0x14));
+    put(at, position, uint32_t(u), uint32_t(v));
+    uint32_t count = 1;
+    if (begin) { particleRelease(begin); count = uint32_t(int32_t(end - begin) >> 5) + 1; }
+    vm_write32(vector + 0xc, block + bytes);
+    vm_write32(vector + 4, block);
+    vm_write32(vector + 8, block + count * 32);
+}
+
+float qglRandom();
+void particleEmit(uint32_t layer);
+
+// ParticlesLayer frame 0x02031494 (after its grid set-up): history ring, the smoothed
+// brightness, colour/intensity hand-off, simulation inputs, the flow-field decay, the camera
+// frustum matrices and the emitter 0x02030b80. Interactions and running tweens (the boot
+// animations, with firmware callbacks) are not adapted.
+void particleLayerFrame(uint32_t layer) {
+    const uint32_t system = vm_read32(layer + 0x18), live = system + 0x1360, S = system + 0x100;
+    storeV4(system + 0x980, positiveZero);
+    {   // 0x0202b2dc
+        const uint32_t h = layer + 0x200, d = layer + 0x400;
+        const auto index = int32_t(vm_read32(h + 0x184)), period = int32_t(vm_read32(h + 0x100));
+        if (period <= 0) throw std::runtime_error("Unadapted original particle history");
+        vm_write32(h + 0x180, uint32_t(index));
+        storeV4(h + uint32_t(index) * 16, loadV4(layer + 0x180));
+        int32_t previous = (index - 1) % period, current = index % period;
+        vm_write32(h + 0x184, uint32_t(index + 1) & 15);
+        if (current < 0) current += period;
+        if (previous < 0) previous += period;
+        const auto slot = int32_t(vm_read32(d + 0x184));
+        vm_write32(d + 0x184, uint32_t(slot + 1) & 15);
+        vm_write32(d + 0x180, uint32_t(slot));
+        storeV4(d + uint32_t(slot) * 16, sub(loadV4(h + uint32_t(current) * 16), loadV4(h + uint32_t(previous) * 16)));
+    }
+    if (vm_read8(layer + 0x1003) || vm_read8(layer + 0x1004) || vm_read8(layer + 0x1005))
+        throw std::runtime_error("Unadapted original particle interaction");
+    {
+        const float x = readFloat(layer + 0x1d8), velocity = readFloat(layer + 0x1dc), push = readFloat(layer + 0x1e0);
+        writeFloat(layer + 0x1e0, 0.0f);
+        float v = std::fma(-velocity, 0.400000006f, push);
+        v = std::fma(0.0f - x, 0.00400000019f, v) + velocity;
+        writeFloat(layer + 0x1dc, v);
+        writeFloat(layer + 0x1d8, v + x);
+        writeFloat(layer + 0x1d4, clampFirmware(readFloat(layer + 0x1d8), 0.0f, 1.0f));
+    }
+    if (vm_read8(layer + 0x110) || vm_read8(layer + 0x13c) || vm_read8(layer + 0x15c) || vm_read8(layer + 0x17c))
+        throw std::runtime_error("Unadapted original particle animation");
+    storeV4(system + 0x1340, loadV4(layer + 0xd0));
+    writeFloat(system + 0x1350, readFloat(layer + 0x120));
+    // Simulation inputs.
+    writeFloat(S, 0.0f); writeFloat(S + 4, readFloat(live + 0x3c)); writeFloat(S + 8, 0.0f);
+    const float friction = readFloat(live + 0x30);
+    for (unsigned i = 0; i < 3; ++i) writeFloat(S + 16 + i * 4, friction);
+    writeFloat(system + 0x9a8, readFloat(live + 0xa0));
+    writeFloat(system + 0x9ac, readFloat(live + 0x34));
+    const float step = readFloat(live + 0x38);
+    storeV4(system + 0x9b0, v4(step, step, step, 1.0f));
+    {
+        const V4 wind = loadV4(live + 0x40);
+        const float s = dotSum(v4(wind.v[0], wind.v[1], wind.v[2], 0.0f), v4(wind.v[0], wind.v[1], wind.v[2], 0.0f));
+        if (0.0001f > ropeLength(s)) storeV4(system + 0x990, loadV4(layer + 0x680));
+        else {
+            const float inverse = ropeInverse(s), scaleWind = readFloat(live + 0x50);
+            const V4 direction = fmaLanes(wind, inverse, negativeZero);
+            storeV4(system + 0x990, fmaLanes(direction, scaleWind, loadV4(layer + 0x680)));
+        }
+    }
+    writeFloat(system + 0x9a4, std::fma(readFloat(layer + 0x1d4), readFloat(live + 0xe8), readFloat(live + 0x54)) + readFloat(layer + 0x604));
+    writeFloat(system + 0x9a0, readFloat(layer + 0xc0));
+    {   // 0x0202c588: flow table decay
+        const float decay = readFloat(layer + 0xbc);
+        for (uint32_t entry = 0; entry < 512 * 3; ++entry) {
+            float f = std::fma(float(int8_t(vm_read8(system + 0x180 + entry))), 0.00787401572f, -0.0f);
+            f = vminf(vmaxf(std::fma(f, decay, -0.0f), -1.0f), 1.0f);
+            const float scaled = std::fma(f, 127.0f, -0.0f);
+            vm_write8(system + 0x180 + entry, uint8_t(scaled != scaled ? 0 : int32_t(scaled)));
+        }
+    }
+    {   // Camera frustum at depth 9 (E at sys+0x800, inverse at sys+0x840) and bounds.
+        const uint32_t camera = vm_read32(layer + 0xb0);
+        float eye[4], target[4], up[4];
+        for (unsigned i = 0; i < 4; ++i) { eye[i] = readFloat(camera + 0x60 + i * 4); target[i] = readFloat(camera + 0x70 + i * 4); up[i] = readFloat(camera + 0x80 + i * 4); }
+        const auto view = lookAt(eye, target, up);
+        const float tangent = std::tan(readFloat(camera + 0x20) * 0.5f);
+        float height = tangent * 9.0f, width = height * readFloat(camera + 0x14);
+        height = height + height; width = width + width;
+        V4 back;
+        for (unsigned i = 0; i < 3; ++i) back.v[i] = std::fma(9.0f, -view[8 + i], -0.0f);
+        back.v[3] = 1.0f;
+        const auto apply = [](const float* m, const V4& x) { const auto r = transform(m, x.v); return v4(r[0], r[1], r[2], r[3]); };
+        float N[16];
+        const V4 columns[4] = {apply(view.data(), v4(1, 0, 0, 0)), apply(view.data(), v4(0, 1, 0, 0)), apply(view.data(), v4(0, 0, 1, 0)), apply(view.data(), back)};
+        for (unsigned c = 0; c < 4; ++c) for (unsigned i = 0; i < 4; ++i) N[c * 4 + i] = columns[c].v[i];
+        const V4 A = apply(N, fmaLanes(v4(width, width, width, width), v4(1, 0, 0, 0), negativeZero));
+        const V4 B = apply(N, fmaLanes(v4(height, height, height, height), v4(0, 1, 0, 0), negativeZero));
+        const V4 C = apply(N, fmaLanes(v4(1, 1, 1, 1), v4(0, 0, 1, 0), negativeZero));
+        const V4 D = apply(N, v4(0, 0, 0, 1));
+        const V4 zero = positiveZero;
+        V4 b0 = fmaLanes(B, zero, negativeZero), a0 = fmaLanes(A, zero, negativeZero), c0 = fmaLanes(C, zero, negativeZero);
+        V4 col0 = add(A, b0), col2 = add(a0, b0), col1 = add(a0, B);
+        const V4 halfB = fmaLanes(v4(-0.5f, -0.5f, -0.5f, -0.5f), B, negativeZero);
+        col0 = add(col0, c0);
+        const V4 d0 = fmaLanes(D, zero, negativeZero);
+        col1 = add(col1, c0);
+        col2 = add(col2, C);
+        const V4 corner = fmaLanes(v4(-0.5f, -0.5f, -0.5f, -0.5f), A, halfB);
+        col0 = add(col0, d0); col1 = add(col1, d0); col2 = add(col2, d0);
+        const V4 shifted = fmaLanes(zero, C, corner);
+        storeV4(system + 0x800, col0); storeV4(system + 0x810, col1); storeV4(system + 0x820, col2);
+        storeV4(system + 0x830, fmaLanes(v4(1, 1, 1, 1), D, shifted));
+        const auto inverse = inverseMatrix(system + 0x800);
+        for (unsigned i = 0; i < 16; ++i) writeFloat(system + 0x840 + i * 4, inverse[i]);
+        storeV4(system + 0x900, v4(-10.0f, -10.0f, -12.0f, 0.0f));
+        storeV4(system + 0x910, v4(10.0f, 10.0f, 7.0f, 0.0f));
+        if (vm_read8(layer + 0xb4)) {
+            vm_write8(layer + 0xb4, 0);
+            storeV4(system + 0x900, positiveZero);
+            storeV4(system + 0x910, positiveZero);
+        }
+    }
+    particleEmit(layer);
+}
+
+float qglRandom() {
+    const uint32_t n = ++randomState, v = n ^ (n << 13);
+    const uint32_t hash = (v * (v * v * 15731u + 789221u) + 1376312589u) & 0x7fffffffu;
+    return std::fma(float(hash), -9.31322574615478515625e-10f, 1.0f);
+}
+
+// Emitter 0x02030b80: new points (0x0202dde4 random grid samples, 0x0202dbf4 an occasional
+// streak along u) go to the next list; each point of the current list whose grid velocity is
+// fast enough spawns a particle along its (randomly flipped) direction inside an emission cone,
+// depth-scaled along the view (0x0202b560), through four queued commands.
+void particleEmit(uint32_t layer) {
+    const uint32_t system = vm_read32(layer + 0x18), live = system + 0x1360;
+    const uint32_t next = layer + 0x90, current = layer + 0xa0;
+    if (vm_read32(next + 8) != vm_read32(next + 4)) vm_write32(next + 8, vm_read32(next + 4));
+    const auto W = int32_t(vm_read32(layer + 0x44)), H = int32_t(vm_read32(layer + 0x48));
+    const auto gridIndex = [&](int32_t size) { return int32_t(((qglRandom() + 1.0f) * 0.5f) * float(size - 1)); };
+    {   // 0x0202dde4
+        const float chance = std::fma(qglRandom(), 0.5f, 0.5f);
+        if (!(chance >= readFloat(live + 0x1c)) && vm_read32(live + 0x18)) {
+            uint32_t emitted = 0;
+            do {
+                const int32_t u = gridIndex(W), v = gridIndex(H);
+                pushPoint(next, sampleGrid(layer, u, v), u, v);
+                ++emitted;
+            } while (vm_read32(live + 0x18) != emitted);
+        }
+    }
+    {   // 0x0202dbf4
+        if (!vm_read32(layer + 0x1008)) {
+            if (std::fma(qglRandom(), 0.5f, 0.5f) < 0.0599999987f) {
+                vm_write32(layer + 0x100c, uint32_t(gridIndex(W)));
+                vm_write32(layer + 0x1010, uint32_t(gridIndex(H)));
+                vm_write32(layer + 0x1008, uint32_t(int32_t(qglRandom() * 80.0f) + 100));
+            }
+        } else if (!(ticks & 1)) {
+            const auto u = int32_t(vm_read32(layer + 0x100c));
+            if (W > u) {
+                vm_write32(layer + 0x100c, uint32_t(u + 1));
+                const auto v = int32_t(vm_read32(layer + 0x1010));
+                pushPoint(next, sampleGrid(layer, u, v), u, v);
+                vm_write32(layer + 0x1008, vm_read32(layer + 0x1008) - 1);
+            } else vm_write32(layer + 0x1008, 0);
+        }
+    }
+    const uint32_t camera = vm_read32(layer + 0xb0), queue = system + 0x1328;
+    for (uint32_t index = 0;; ++index) {
+        const uint32_t begin = vm_read32(current + 4);
+        const uint32_t count = begin ? uint32_t(int32_t(vm_read32(current + 8) - begin) >> 5) : 0;
+        if (count == index) {
+            if (vm_read32(current + 8) != begin) vm_write32(current + 8, begin);
+            for (uint32_t field : {4u, 8u, 0xcu}) {
+                const uint32_t a = vm_read32(current + field), b = vm_read32(next + field);
+                vm_write32(current + field, b); vm_write32(next + field, a);
+            }
+            return;
+        }
+        const uint32_t point = begin + index * 32;
+        const V4 now = sampleGrid(layer, int32_t(vm_read32(point + 0x10)), int32_t(vm_read32(point + 0x14)));
+        V4 displacement = sub(now, loadV4(point));
+        displacement.v[3] = 0.0f;
+        const float inverseStep = 1.0f / readFloat(live + 0x38);
+        const V4 velocity = fmaLanes(displacement, inverseStep, negativeZero);
+        const float speedSquared = dotSum(velocity, velocity);
+        if (0.0001f > ropeLength(speedSquared)) continue;
+        V4 direction = fmaLanes(velocity, ropeInverse(speedSquared), negativeZero);
+        if ((qglRandom() + 1.0f) * 0.5f < readFloat(live + 0x10))
+            for (auto& lane : direction.v) lane = std::bit_cast<float>(std::bit_cast<uint32_t>(lane) ^ 0x80000000u);
+        const float dx = direction.v[0], dy = direction.v[1], dz = direction.v[2];
+        const V4 c4 = v4(0.0f, dz, -dy, 0.0f), c6 = v4(-dz, 0.0f, dx, 0.0f), c5 = v4(dy, -dx, 0.0f, 0.0f);
+        const float s4 = dotSum(c4, c4), s6 = dotSum(c6, c6), s5 = dotSum(c5, c5);
+        const V4* chosen = &c5; float chosenSum = s5;
+        if (s4 > s6) { if (s4 > s5) { chosen = &c4; chosenSum = s4; } }
+        else if (s6 > s5) { chosen = &c6; chosenSum = s6; }
+        const V4 perpendicular = fmaLanes(*chosen, ropeInverse(chosenSum), negativeZero);
+        const float spread = (qglRandom() + 1.0f) * 0.5f;
+        const float theta = spread * (readFloat(live + 0xc) * 0.0174532924f);
+        const auto yzx = [](const V4& a) { return v4(a.v[1], a.v[2], a.v[0], a.v[3]); };
+        const auto zxy = [](const V4& a) { return v4(a.v[2], a.v[0], a.v[1], a.v[3]); };
+        const V4 cross = sub(fmaLanes(yzx(direction), zxy(perpendicular), negativeZero),
+                             fmaLanes(zxy(direction), yzx(perpendicular), negativeZero));
+        const float phi = ((qglRandom() + 1.0f) * 0.5f) * 6.28318548f;
+        const float sinTheta = firmwareSinCos(theta, 0), cosPhi = firmwareSinCos(phi, 1), sinPhi = firmwareSinCos(phi, 0);
+        const float a = sinTheta * sinPhi, b = sinTheta * cosPhi, cosTheta = firmwareSinCos(theta, 1);
+        const V4 bend = fmaLanes(cross, a, negativeZero);
+        const V4 tail = fmaLanes(positiveZero, v4(0, 0, 0, 1), negativeZero);
+        const V4 around = fmaLanes(v4(b, b, b, b), perpendicular, bend);
+        const V4 emission = add(fmaLanes(direction, cosTheta, around), tail);
+        // 0x0202b560: scale the component along the view's z column by the emit z-scale.
+        float eye[4], target[4], up[4];
+        for (unsigned i = 0; i < 4; ++i) { eye[i] = readFloat(camera + 0x60 + i * 4); target[i] = readFloat(camera + 0x70 + i * 4); up[i] = readFloat(camera + 0x80 + i * 4); }
+        const auto view = lookAt(eye, target, up);
+        const V4 axis = v4(view[8], view[9], view[10], 0.0f);
+        const V4 offset = sub(v4(emission.v[0], emission.v[1], emission.v[2], 1.0f), v4(0, 0, 0, 1));
+        const float along = std::fma(dotSum(offset, axis), 1.0f / dotSum(axis, axis), -0.0f);
+        const V4 projected = fmaLanes(axis, along, v4(0, 0, 0, 1));
+        const float zScale = readFloat(live + 0x14);
+        const V4 scaled = add(fmaLanes(projected, zScale, negativeZero), sub(emission, projected));
+        const V4 heading = v4(scaled.v[0], scaled.v[1], scaled.v[2], emission.v[3]);
+        const float gridSpeed = ropeLength(dotSum(velocity, velocity));
+        float multiplier = readFloat(live + 0x4);
+        multiplier = multiplier * std::fma(qglRandom(), readFloat(live + 0x8), 1.0f);
+        const float speed = atLeast(std::pow(float(gridSpeed * multiplier), float(0.5f)), readFloat(live + 0x0));
+        const float aging = readFloat(live + 0x20), agingRandom = qglRandom(), agingVariance = readFloat(live + 0x24);
+        const auto command = [&](uint32_t type) -> uint32_t {
+            const uint32_t used = vm_read32(queue), capacity = vm_read32(queue + 4);
+            if (capacity == used) return 0;
+            const uint32_t entry = vm_read32(queue + 0xc) + used * 24;
+            vm_write32(queue, used + 1);
+            vm_write32(entry, type);
+            if (type) vm_write32(entry + 4, 0xffffffffu);
+            return entry;
+        };
+        // A full queue drops the rest of this particle's commands.
+        if (!command(0)) continue;
+        const uint32_t placed = command(1);
+        if (!placed) continue;
+        writeFloat(placed + 8, now.v[0]); writeFloat(placed + 12, now.v[1]); writeFloat(placed + 16, now.v[2]);
+        const uint32_t launched = command(2);
+        if (!launched) continue;
+        const V4 launch = fmaLanes(heading, speed, negativeZero);
+        writeFloat(launched + 8, launch.v[0]); writeFloat(launched + 12, launch.v[1]); writeFloat(launched + 16, launch.v[2]);
+        const uint32_t timed = command(4);
+        if (!timed) continue;
+        const float lifetime = aging * std::fma(agingRandom, agingVariance, 1.0f);
+        writeFloat(timed + 8, 0.00100000005f < lifetime ? lifetime : 0.00100000005f);
+    }
+}
+
 }
 
 // ---- Native particle update ---------------------------------------------------------
