@@ -533,6 +533,17 @@ float ropeInverse(float s) {
     const float r = std::fma(std::fma(-e, t, 1.0f), h, e);
     return r == r ? r : e;
 }
+// 0x02024228: rotation about a unit axis (columns; _FSin for cosine and sine).
+using Rotation = std::array<std::array<float, 4>, 4>;
+Rotation axisRotation(const std::array<float, 3>& a, float radians) {
+    const float c = firmwareSinCos(radians, 1), s = firmwareSinCos(radians, 0), k = 1.0f - c;
+    const std::array<float, 3> ka{k * a[0], k * a[1], k * a[2]}, sa{s * a[0], s * a[1], s * a[2]};
+    const auto P = [&](unsigned i, unsigned j) { return ka[i] * a[j]; };
+    return {{{c + P(0,0), P(1,0) + sa[2], P(2,0) - sa[1], 0},
+             {P(0,1) - sa[2], P(1,1) + c, P(2,1) + sa[0], 0},
+             {P(0,2) + sa[1], P(1,2) - sa[0], P(2,2) + c, 0},
+             {0, 0, 0, 1}}};
+}
 // 0x0204ab04: the solver's hash RNG (qgl's Perlin hash) in [-1, 1].
 float ropeRandom(uint32_t& state) {
     const uint32_t n = ++state, v = (n << 13) ^ n;
@@ -710,16 +721,7 @@ RopeSolver::Matrix RopeSolver::modelMatrix(Vector position, Vector axis, float a
     const float t = estimate * sum, half = estimate * 0.5f;
     float inverse = std::fma(std::fma(-estimate, t, 1.0f), half, estimate);
     if (inverse != inverse) inverse = estimate;
-    const std::array<float, 3> a{x * inverse, y * inverse, z * inverse};
-    const float radians = angle * 0.01745329238474369f;
-    const float c = firmwareSinCos(radians, 1), s = firmwareSinCos(radians, 0), k = 1.0f - c;
-    const std::array<float, 3> ka{k * a[0], k * a[1], k * a[2]}, sa{s * a[0], s * a[1], s * a[2]};
-    const auto P = [&](unsigned i, unsigned j) { return ka[i] * a[j]; };
-    const float R[4][4] = {
-        {c + P(0,0), P(1,0) + sa[2], P(2,0) - sa[1], 0},
-        {P(0,1) - sa[2], P(1,1) + c, P(2,1) + sa[0], 0},
-        {P(0,2) + sa[1], P(1,2) - sa[0], P(2,2) + c, 0},
-        {0, 0, 0, 1}};
+    const auto R = axisRotation({x * inverse, y * inverse, z * inverse}, angle * 0.01745329238474369f);
     const float pos[4] = {position[0], position[1], position[2], 1};
     Matrix native;
     for (unsigned column = 0; column < 4; ++column)
@@ -947,15 +949,28 @@ unsigned RopeSolver::particleFrame(uint32_t system, uint32_t layer, const std::v
     vm_write32(layer + 0x48, height);
     for (unsigned i = 0; i < 16; ++i) writeFloat(layer + 0x50 + i * 4, columns[i]);
     auto& cpu = state_->particleCpu;
-    // The native layer frame (particleLayerFrame) is not verified yet: opt in with
-    // MOYOU_PARTICLE_FRAME=native (plus MOYOU_VERIFY_NATIVE=1 to compare). See HANDOVER.md.
+    // Layer frame: native (particleLayerFrame) unless MOYOU_PARTICLE_FRAME=original;
+    // MOYOU_VERIFY_NATIVE=1 compares it with the original every frame.
     const char* frameMode = std::getenv("MOYOU_PARTICLE_FRAME");
-    const bool nativeFrame = frameMode && !std::strcmp(frameMode, "native");
+    const bool nativeFrame = !frameMode || std::strcmp(frameMode, "original");
     if (!nativeFrame) {
         cpu.gpr[3] = layer;
         cpu.fpr[1] = seconds;
         moyou_rope_func_02031494(&cpu); drain(&cpu);   // frame logic, simulation inputs, emitter
     } else if (verifyNative()) {
+        // Development (MOYOU_EXERCISE_INPUT=1): random controller motion (layer+0x180) and D-pad
+        // tilts so the interaction handlers' branches run; both paths see the same input.
+        if (std::getenv("MOYOU_EXERCISE_INPUT")) {
+            static uint32_t seed = 12345;
+            const auto next = [] { seed = seed * 1664525u + 1013904223u; return float(int32_t(seed) >> 8) * (1.0f / 8388608.0f); };
+            static float phase = 0;
+            phase += 0.37f;
+            // Alternating calm and shaking stretches of under a second.
+            const float shake = std::fmod(phase, 30.0f) < 15.0f ? 0.0f : 3.0f;
+            for (unsigned i = 0; i < 4; ++i)
+                writeFloat(layer + 0x180 + i * 4, std::sin(phase * (1.0f + i)) * shake + next() * shake);
+            if ((seed >> 24) % 23 == 0) vm_write32(layer + 0x1c0, (seed >> 8) % 4);
+        }
         // The original from a snapshot (arena, allocator, qgl RNG), then the native frame from the
         // same state; arena bytes, allocator and RNG must agree.
         const std::vector<uint8_t> before(vm_base + particleBase, vm_base + particleEnd);
@@ -971,6 +986,15 @@ unsigned RopeSolver::particleFrame(uint32_t system, uint32_t layer, const std::v
         particleBlocks = blocks; particleFree = holes; particleCursor = cursor; ::randomState = random;
         particleLayerFrame(layer);
         reportDifference("particle frame", vm_base + particleBase, original.data(), original.size());
+        for (size_t i = 0, shown = 0; i + 4 <= original.size() && shown < 4; i += 4)
+            if (std::memcmp(vm_base + particleBase + i, original.data() + i, 4)) {
+                const uint32_t address = uint32_t(particleBase + i);
+                const uint32_t a = __builtin_bswap32(*reinterpret_cast<const uint32_t*>(original.data() + i));
+                const uint32_t b = vm_read32(address);
+                std::fprintf(stderr, "  %08x (layer%+d system%+d): original %08x %.9g native %08x %.9g\n", address,
+                    int(address - layer), int(address - system), a, std::bit_cast<float>(a), b, std::bit_cast<float>(b));
+                ++shown;
+            }
         if (particleBlocks != originalBlocks || particleFree != originalHoles || particleCursor != originalCursor)
             std::fprintf(stderr, "native particle frame: 1 bytes differ (allocator)\n");
         if (::randomState != originalRandom)
@@ -1522,13 +1546,242 @@ void pushPoint(uint32_t vector, const V4& position, int32_t u, int32_t v) {
     vm_write32(vector + 8, block + count * 32);
 }
 
+// Ring slot (last - back) mod period, as the firmware's divw/mullw remainder plus period.
+int32_t ringSlot(int32_t last, int32_t back, int32_t period) {
+    int32_t r = last - back;
+    r -= (r / period) * period;
+    return r < 0 ? r + period : r;
+}
+V4 withoutW(V4 a) { a.v[3] = 0.0f; return a; }
+// VMX lane operations with the VSCR non-Java mode the firmware runs in: subnormal inputs and
+// results become zero of the same sign (FPU code keeps them).
+float flush(float x) { return (std::bit_cast<uint32_t>(x) & 0x7f800000u) ? x : std::copysign(0.0f, x); }
+float vmadd(float a, float c, float b) {
+    const float r = std::fma(flush(a), flush(c), flush(b));
+    return r != r ? std::bit_cast<float>(0x7fc00000u) : flush(r);
+}
+float vadd(float a, float b) { return flush(flush(a) + flush(b)); }
+V4 vmadd(const V4& a, const V4& c, const V4& b) { V4 r; for (unsigned i = 0; i < 4; ++i) r.v[i] = vmadd(a.v[i], c.v[i], b.v[i]); return r; }
+V4 vmadd(float a, const V4& c, const V4& b) { return vmadd(v4(a, a, a, a), c, b); }
+V4 vscale(const V4& a, float f) { return vmadd(a, v4(f, f, f, f), negativeZero); }
+V4 vsub(const V4& a, const V4& b) { V4 r; for (unsigned i = 0; i < 4; ++i) r.v[i] = flush(flush(a.v[i]) - flush(b.v[i])); return r; }
+// dot0 / ropeLength / ropeInverse in flushed lanes.
+float vdot(const V4& a) {
+    float p[4];
+    for (unsigned i = 0; i < 4; ++i) p[i] = vmadd(a.v[i], a.v[i], 0.0f);
+    return vadd(vadd(p[0], p[1]), vadd(p[2], p[3]));
+}
+float vlength(float s) {
+    s = flush(s);
+    const float e = estimate(s), t = vmadd(e, s, 0.0f), h = vmadd(t, 0.5f, 0.0f);
+    if (s == 0 || e == 0) return s;
+    return vmadd(flush(-std::fma(e, t, -1.0f)), h, t);
+}
+float vinverse(float s) {
+    s = flush(s);
+    const float e = estimate(s), t = vmadd(e, s, 0.0f), h = vmadd(e, 0.5f, 0.0f);
+    const float r = vmadd(flush(-std::fma(e, t, -1.0f)), h, e);
+    return r == r ? r : e;
+}
+// transform() in flushed lanes.
+V4 vtransform(const float* m, const V4& x) {
+    V4 r;
+    for (unsigned i = 0; i < 4; ++i) {
+        float t = vmadd(x.v[1], m[4 + i], -0.0f);
+        t = vmadd(x.v[0], m[i], t);
+        t = vmadd(x.v[2], m[8 + i], t);
+        r.v[i] = vmadd(x.v[3], m[12 + i], t);
+    }
+    return r;
+}
+
+// 0x0202bcbc: shake detector for one axis of the motion history (X+0 selects x/y/z). Fits a
+// line to the last 16 deltas and one to their running sum; a sustained residual above the
+// threshold (live+0x108) flips the shake sign and kicks X+0x410.
+void shakeDetect(uint32_t X, uint32_t h, uint32_t d, uint32_t live) {
+    const auto component = int32_t(vm_read32(X));
+    {
+        int32_t last = int32_t(vm_read32(d + 0x180));
+        const auto period = int32_t(vm_read32(d + 0x100));
+        for (unsigned i = 0; i < 16; ++i, --last) {
+            int32_t slot = last - (last / period) * period;
+            if (slot < 0) slot += period;
+            vm_write32(X + 4 + i * 4, vm_read32(d + uint32_t(slot) * 16 + uint32_t(component) * 4));
+        }
+    }
+    float y[16], sum[16], fit[16];
+    for (unsigned i = 0; i < 16; ++i) y[i] = readFloat(X + 4 + i * 4);
+    {
+        float n = 0, sx = 0, sy = 0, sxy = 0, sxx = 0;
+        for (unsigned i = 0; i < 16; ++i) {
+            n += 1.0f;
+            const float x = float(i);
+            sy += y[i]; sx += x; sxy = std::fma(x, y[i], sxy); sxx = std::fma(x, x, sxx);
+        }
+        float slope = 0, intercept = 0;
+        if (n != 0) {
+            const float a = sxx * n, b = sxy * n, c = sy * sxx;
+            const float den = std::fma(sx, sx, -a);
+            slope = std::fma(sy, sx, -b) / den;
+            intercept = std::fma(sxy, sx, -c) / den;
+        }
+        writeFloat(X + 0x280, slope);
+        writeFloat(X + 0x284, intercept);
+        const uint32_t k = vm_read32(X + 0x384);
+        vm_write32(X + 0x380, k);
+        writeFloat(X + 0x300 + k * 4, intercept);
+        vm_write32(X + 0x384, (k + 1) % 5);
+    }
+    {
+        float running = 0;
+        for (unsigned i = 0; i < 16; ++i) sum[i] = running = running + y[i];
+        float n = 0, sx = 0, sy = 0, sxy = 0, sxx = 0;
+        for (unsigned i = 0; i < 16; ++i) {
+            n += 1.0f;
+            const float x = float(i);
+            sy += sum[i]; sx += x; sxy = std::fma(x, sum[i], sxy); sxx = std::fma(x, x, sxx);
+        }
+        float intercept = 0, slope = 0;
+        if (n != 0) {
+            const float c = sxx * sy, b = sxy * n, a = sxx * n;
+            const float den = std::fma(sx, sx, -a);
+            intercept = std::fma(sx, sxy, -c) / den;
+            slope = std::fma(sx, sy, -b) / den;
+        }
+        for (unsigned i = 0; i < 16; ++i) fit[i] = std::fma(slope, float(i), intercept);
+    }
+    float residual = 0;
+    for (unsigned i = 0; i < 16; ++i) residual += std::fabs(sum[i] - fit[i]);
+    writeFloat(X + 0x44, residual);
+    const uint32_t ring = X + 0x80;
+    const auto k = int32_t(vm_read32(ring + 0x184));
+    vm_write32(ring + 0x180, uint32_t(k));
+    vm_write32(ring + 0x184, uint32_t(k + 1) & 63);
+    const auto period = int32_t(vm_read32(ring + 0x100));
+    writeFloat(ring + uint32_t(k) * 4, residual);
+    float kick = readFloat(X + 0x410) * 0.600000024f;
+    writeFloat(X + 0x410, kick);
+    float recent = 0;
+    for (int32_t j = 0; j < 3; ++j) recent += readFloat(ring + uint32_t(ringSlot(k, j, period)) * 4);
+    const float level = atLeast(0.0f, std::fabs(recent / 3.0f) - readFloat(live + 0x108));
+    writeFloat(X + 0x400, level);
+    if (level != 0 && readFloat(X + 0x404) == 0) {
+        const float w = readFloat(h + uint32_t(ringSlot(int32_t(vm_read32(h + 0x180)), 0, int32_t(vm_read32(h + 0x100)))) * 16 + 12);
+        const float sign = w > 0.0f ? -1.0f : 1.0f;
+        const float previous = readFloat(X + 0x408);
+        const float signedLevel = sign * readFloat(X + 0x400);
+        writeFloat(X + 0x408, sign);
+        const float turn = previous * sign;
+        kick = signedLevel * 10.0f;
+        writeFloat(X + 0x410, kick);
+        if (turn < 0.0f && vm_read32(X + 0x414) <= 0x77) writeFloat(X + 0x410, kick + kick);
+        vm_write32(X + 0x414, 0);
+        kick = readFloat(X + 0x410);
+    }
+    writeFloat(X + 0x40c, kick);
+    writeFloat(X + 0x404, level);
+    vm_write32(X + 0x414, vm_read32(X + 0x414) + 1);
+}
+
+// 0x0202c27c: one shake axis, its spring (X+0x41c position, +0x420 velocity, +0x424 push) and
+// the push it adds along the view's up column.
+V4 shakeAxis(uint32_t X, uint32_t h, uint32_t d, uint32_t spring, const V4& column, uint32_t live) {
+    shakeDetect(X, h, d, live);
+    const float kick = readFloat(X + 0x40c);
+    if (std::fabs(kick) > 0.0f) {
+        writeFloat(X + 0x424, std::fma(kick, readFloat(live + 0x100), readFloat(X + 0x424)));
+        writeFloat(spring + 8, std::fabs(readFloat(X + 0x40c) * readFloat(live + 0x104)) + readFloat(spring + 8));
+    }
+    const float x = readFloat(X + 0x41c), velocity = readFloat(X + 0x420), push = readFloat(X + 0x424);
+    writeFloat(X + 0x424, 0.0f);
+    const float v = std::fma(-velocity, 0.200000003f, push) + velocity;
+    writeFloat(X + 0x420, v);
+    writeFloat(X + 0x41c, v + x);
+    const float amount = clampFirmware(readFloat(X + 0x420), -1.0f, 1.0f);
+    writeFloat(X + 0x418, amount);
+    return vscale(vscale(column, amount), readFloat(live + 0xfc));
+}
+
+V4 cameraField(uint32_t camera, uint32_t offset) { return loadV4(camera + offset); }
+
+// 0x0202c3e0: two shake axes (layer+0x700, layer+0xb80) push the flow offset (system+0x980).
+void particleShake(uint32_t layer) {
+    const uint32_t system = vm_read32(layer + 0x18), live = system + 0x1360, camera = vm_read32(layer + 0xb0);
+    const V4 eye = cameraField(camera, 0x60), target = cameraField(camera, 0x70), up = cameraField(camera, 0x80);
+    const auto view = lookAt(eye.v, target.v, up.v);
+    const V4 column = v4(view[4], view[5], view[6], view[7]);
+    const uint32_t h = layer + 0x200, d = layer + 0x400, spring = layer + 0x1d8;
+    const V4 first = shakeAxis(layer + 0x700, h, d, spring, column, live);
+    storeV4(system + 0x980, vmadd(readFloat(live + 0x10c), first, loadV4(system + 0x980)));
+    const V4 second = shakeAxis(layer + 0xb80, h, d, spring, column, live);
+    storeV4(system + 0x980, vmadd(readFloat(live + 0x110), second, loadV4(system + 0x980)));
+}
+
+// 0x0202c758: length of the newest motion delta, and that times live+0xec (layer+0x600/0x604).
+void particleMotion(uint32_t layer) {
+    const uint32_t d = layer + 0x400;
+    const auto slot = ringSlot(int32_t(vm_read32(d + 0x180)), 0, int32_t(vm_read32(d + 0x100)));
+    const float length = vlength(vdot(withoutW(loadV4(d + uint32_t(slot) * 16))));
+    writeFloat(layer + 0x600, length);
+    writeFloat(layer + 0x604, length * readFloat(vm_read32(layer + 0x18) + 0x144c));
+}
+
+// 0x0202d02c: the camera tilt. A pending D-pad direction (layer+0x1c0: 0 left, 1 right, 2 up,
+// 3 down, 4 none) pushes the tilt spring (+0x198/+0x19c/+0x1a0) and the weave spring
+// (+0x1e0), and sets the tilt axis (+0x1b0) in view space; the tilt adds to the flow offset
+// (system+0x980), whose length rotates the field (system+0x940). Eye minus twice the view
+// direction goes to system+0x930.
+void particleTilt(uint32_t layer) {
+    const uint32_t system = vm_read32(layer + 0x18), live = system + 0x1360, camera = vm_read32(layer + 0xb0);
+    const V4 eye = cameraField(camera, 0x60), target = cameraField(camera, 0x70), up = cameraField(camera, 0x80);
+    V4 direction = withoutW(vsub(eye, target));
+    direction = vscale(direction, vinverse(vdot(direction)));
+    const auto view = lookAt(eye.v, target.v, up.v);
+    storeV4(system + 0x930, vsub(eye, vscale(direction, 2.0f)));
+    const auto mode = int32_t(vm_read32(layer + 0x1c0));
+    if (mode != 4) {
+        static constexpr float directions[4][2] = {{-1, 0}, {1, 0}, {0, 1}, {0, -1}};
+        if (mode < 0 || mode > 3) throw std::runtime_error("Unadapted original particle tilt direction");
+        const float dx = directions[mode][0], dy = directions[mode][1];
+        const V4 local = v4(-dy, dx, 0, 0);
+        const V4 axis = vtransform(view.data(), local);
+        const float across = readFloat(live + 0xf8), along = readFloat(live + 0xf4);
+        storeV4(layer + 0x1b0, vmadd(v4(across, along, 1.0f, 0.0f), axis, negativeZero));
+        writeFloat(layer + 0x1a0, readFloat(layer + 0x190) + readFloat(layer + 0x1a0));
+        const float p0 = vmadd(across, -dy, 0.0f), p1 = vmadd(along, dx, 0.0f);
+        const float amount = vadd(vadd(p0, p1), vadd(0.0f, 0.0f));
+        writeFloat(layer + 0x1e0, std::fma(readFloat(layer + 0x1d0), std::fabs(amount), readFloat(layer + 0x1e0)));
+    }
+    const float x = readFloat(layer + 0x198), velocity = readFloat(layer + 0x19c), push = readFloat(layer + 0x1a0);
+    writeFloat(layer + 0x1a0, 0.0f);
+    const float v = std::fma(-velocity, 0.0199999996f, push) + velocity;
+    writeFloat(layer + 0x19c, v);
+    writeFloat(layer + 0x198, v + x);
+    const float tilt = clampFirmware(readFloat(layer + 0x19c), 0.0f, 1.0f);
+    writeFloat(layer + 0x194, tilt);
+    const V4 offset = vmadd(vmadd(readFloat(live + 0xf0), loadV4(layer + 0x1b0), negativeZero),
+                            v4(tilt, tilt, tilt, tilt), loadV4(system + 0x980));
+    storeV4(system + 0x980, offset);
+    const float s = vdot(withoutW(offset));
+    const float length = vlength(s);
+    if (length >= 9.99999975e-06f) {
+        const V4 axis = vscale(offset, vinverse(s));
+        const auto R = axisRotation({axis.v[0], axis.v[1], axis.v[2]}, length);
+        for (unsigned c = 0; c < 4; ++c) storeV4(system + 0x940 + c * 16, v4(R[c][0], R[c][1], R[c][2], R[c][3]));
+    } else {
+        for (unsigned c = 0; c < 4; ++c) storeV4(system + 0x940 + c * 16, v4(c == 0, c == 1, c == 2, c == 3));
+    }
+    vm_write32(layer + 0x1c0, 4);
+    vm_write8(layer + 0x1c4, 0);
+}
+
 float qglRandom();
 void particleEmit(uint32_t layer);
 
 // ParticlesLayer frame 0x02031494 (after its grid set-up): history ring, the smoothed
 // brightness, colour/intensity hand-off, simulation inputs, the flow-field decay, the camera
-// frustum matrices and the emitter 0x02030b80. Interactions and running tweens (the boot
-// animations, with firmware callbacks) are not adapted.
+// frustum matrices and the emitter 0x02030b80, with the interaction handlers (tilt, motion,
+// shake). Running tweens (the boot animations, with firmware callbacks) are not adapted.
 void particleLayerFrame(uint32_t layer) {
     const uint32_t system = vm_read32(layer + 0x18), live = system + 0x1360, S = system + 0x100;
     storeV4(system + 0x980, positiveZero);
@@ -1547,8 +1800,9 @@ void particleLayerFrame(uint32_t layer) {
         vm_write32(d + 0x180, uint32_t(slot));
         storeV4(d + uint32_t(slot) * 16, sub(loadV4(h + uint32_t(current) * 16), loadV4(h + uint32_t(previous) * 16)));
     }
-    if (vm_read8(layer + 0x1003) || vm_read8(layer + 0x1004) || vm_read8(layer + 0x1005))
-        throw std::runtime_error("Unadapted original particle interaction");
+    if (vm_read8(layer + 0x1003)) particleTilt(layer);
+    if (vm_read8(layer + 0x1004)) particleMotion(layer);
+    if (vm_read8(layer + 0x1005)) particleShake(layer);
     {
         const float x = readFloat(layer + 0x1d8), velocity = readFloat(layer + 0x1dc), push = readFloat(layer + 0x1e0);
         writeFloat(layer + 0x1e0, 0.0f);
