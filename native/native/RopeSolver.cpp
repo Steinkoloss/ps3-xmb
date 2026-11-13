@@ -258,6 +258,7 @@ void particleRelease(uint64_t address) {
     }
     particleFree[start] = size;
 }
+void createRenderObject(uint32_t renderObject, uint32_t capacity);
 void ps3_indirect_call_to(ppu_context*, uint32_t) { throw std::runtime_error("Unadapted original CPU indirect target"); }
 // One guest thread per context and no sharing: lightweight mutex lock (0x66) / unlock (0x68) succeed.
 void lv2_syscall(ppu_context* ctx) {
@@ -346,21 +347,7 @@ void ps3_hle_call(unsigned nid, ppu_context* ctx) {
     case 0x5262639a: ctx->gpr[3] = 0; return;
     case 0xf80196c1: ctx->gpr[3] = particleAllocate(16, 16); return;
     case 0x8461e528: ctx->gpr[3] = 0; return;                                          // system time (stats only)
-    case 0xffff0005: {                                                                // render object ctor
-        const auto renderObject = uint32_t(ctx->gpr[3]), capacity = uint32_t(ctx->gpr[4]);
-        if (!capacity || capacity > 0x4000) throw std::runtime_error("Unadapted original particle capacity");
-        vm_write32(renderObject, 0x0209d8e0);
-        vm_write32(renderObject + 8, 1);       // held by the adapter; never released
-        vm_write32(renderObject + 0x10, capacity);
-        for (uint32_t i = 0; i < 2; ++i) {
-            vertexBuffers[i] = particleAllocate(capacity * 32, 0x80);
-            vm_write32(renderObject + 0x1c + i * 0xc, vertexToken + i);
-            const auto list = particleAllocate(16, 16);
-            vm_write32(list, 2);
-            vm_write32(renderObject + 0x44 + i * 4, list);
-        }
-        return;
-    }
+    case 0xffff0005: createRenderObject(uint32_t(ctx->gpr[3]), uint32_t(ctx->gpr[4])); return;   // render object ctor
     case 0xffff0006: {                                                                // vertex array -> pointer
         const auto token = uint32_t(ctx->gpr[3]) - vertexToken;
         if (token > 1 || !vertexBuffers[token]) throw std::runtime_error("Unadapted original vertex array");
@@ -808,7 +795,183 @@ RopeSolver::Matrix RopeSolver::multiplyOriginal(const Matrix& left, const Matrix
     return matrix;
 }
 
+// Render object (adapter for the firmware's particle vertex buffers, 0x0209d8e0): two vertex
+// buffers addressed by token and two submission lists. (C linkage: declared beside the imports.)
+extern "C" void createRenderObject(uint32_t renderObject, uint32_t capacity) {
+    if (!capacity || capacity > 0x4000) throw std::runtime_error("Unadapted original particle capacity");
+    vm_write32(renderObject, 0x0209d8e0);
+    vm_write32(renderObject + 8, 1);       // held by the adapter; never released
+    vm_write32(renderObject + 0x10, capacity);
+    for (uint32_t i = 0; i < 2; ++i) {
+        vertexBuffers[i] = particleAllocate(capacity * 32, 0x80);
+        vm_write32(renderObject + 0x1c + i * 0xc, vertexToken + i);
+        const auto list = particleAllocate(16, 16);
+        vm_write32(list, 2);
+        vm_write32(renderObject + 0x44 + i * 4, list);
+    }
+}
+
+namespace {
+// Parameter block constructor 0x02058ba8 (live +0x1360, menu +0x1490, SPE deltas +0x15c0):
+// every default is a constant of the renderer image, read from where the firmware loads it.
+void particleParameterDefaults(uint32_t block) {
+    static constexpr std::array<std::pair<uint16_t, uint32_t>, 59> floats = {{
+        {0x00,0x2092ef8},{0x04,0x2092efc},{0x08,0x2092f00},{0x0c,0x2092f04},{0x10,0x2092f08},{0x14,0x2092f0c},
+        {0x1c,0x2092f10},{0x20,0x2092ef8},
+        {0x30,0x2092f14},{0x34,0x2092f18},{0x38,0x2092f1c},{0x3c,0x2092f20},{0x50,0x2092f24},{0x54,0x2092f28},
+        {0x80,0x2092f2c},{0x84,0x2092f30},{0x88,0x2092f34},{0x8c,0x2092f38},{0x90,0x2092f3c},{0x94,0x2092f40},
+        {0x98,0x2092f40},{0x9c,0x2092f44},
+        {0xa0,0x2092f48},{0xa4,0x2092f4c},{0xa8,0x2092f50},{0xac,0x2092f54},{0xb0,0x2092f58},{0xb4,0x2092f5c},
+        {0xb8,0x2092f60},{0xbc,0x2092f64},{0xc0,0x2092f68},{0xc4,0x2092f6c},{0xc8,0x2092f70},{0xcc,0x2092f74},
+        {0xd0,0x2092f78},{0xd4,0x2092f7c},
+        {0xd8,0x2092fa8},{0xdc,0x2092fac},{0xe0,0x2092fb0},{0xe4,0x2092fb4},
+        {0xe8,0x2092f80},{0xec,0x2092f84},{0xf0,0x2092f88},{0xf4,0x2092f8c},{0xf8,0x2092f8c},{0xfc,0x2092f90},
+        {0x100,0x2092f8c},{0x104,0x2092f94},{0x108,0x2092f98},{0x10c,0x2092f9c},{0x110,0x2092fa0},{0x114,0x2092fa4},
+        {0x118,0x2092f8c},{0x11c,0x2092f8c},
+        // 16-byte vectors
+        {0x40,0x20949a0},{0x60,0x20949b0},{0x70,0x20949c0},{0,0},{0,0}}};
+    for (unsigned i = 0; i < 54; ++i) vm_write32(block + floats[i].first, vm_read32(floats[i].second));
+    for (unsigned i = 54; i < 57; ++i)
+        for (unsigned w = 0; w < 4; ++w) vm_write32(block + floats[i].first + w * 4, vm_read32(floats[i].second + w * 4));
+    vm_write32(block + 0x18, 4);
+    vm_write32(block + 0x24, 0);
+    vm_write8(block + 0x120, 1);
+    vm_write8(block + 0x121, 0);
+    vm_write32(block + 0x124, 2);
+}
+
+// Simulation input constructor 0x0205d510 (system+0x100 and +0xa00): gravity, friction, the
+// 32 x 16 flow grid descriptor over the 512-entry table at +0x80, identity frustum matrices,
+// open bounds and the 60 Hz step.
+void particleSimulationDefaults(uint32_t S) {
+    const auto identity = [](uint32_t at) { for (unsigned i = 0; i < 4; ++i) writeFloat(at + i * 20, 1.0f); };
+    writeFloat(S + 0x04, -4.99999987e-06f);
+    writeFloat(S + 0x0c, 1.0f);
+    for (unsigned i = 0; i < 3; ++i) writeFloat(S + 0x10 + i * 4, 0.00999999978f);
+    vm_write32(S + 0x680, 512);
+    identity(S + 0x700);
+    identity(S + 0x740);
+    vm_write32(S + 0x780, S + 0x80);
+    vm_write32(S + 0x784, 32); vm_write32(S + 0x788, 16);
+    writeFloat(S + 0x790, 32.0f); writeFloat(S + 0x794, 16.0f);
+    vm_write32(S + 0x7a8, 1);
+    for (unsigned i = 0; i < 3; ++i) vm_write32(S + 0x7b4 + i * 4, 1);
+    vm_write32(S + 0x7c0, 32); vm_write32(S + 0x7c4, 16); vm_write32(S + 0x7c8, 31); vm_write32(S + 0x7cc, 15);
+    for (unsigned i = 0; i < 4; ++i) { writeFloat(S + 0x800 + i * 4, -10000.0f); writeFloat(S + 0x810 + i * 4, 10000.0f); }
+    identity(S + 0x840);
+    writeFloat(S + 0x8a0, 0.200000003f);
+    writeFloat(S + 0x8a8, 0.0500000007f);
+    writeFloat(S + 0x8ac, 100.0f);
+    for (unsigned i = 0; i < 3; ++i) writeFloat(S + 0x8b0 + i * 4, 0.0166666675f);
+    writeFloat(S + 0x8bc, 1.0f);
+}
+}
+
+// Particle system constructor 0x02060b14(system, ..., capacity, memory managers) as the arena
+// it leaves: two particle arrays (dead particles: age -666, scale 1), the free index list, the
+// sort buffer (a tenth of four per particle, 24 bytes each), the command queue, three
+// parameter blocks, two simulation input blocks, the render object and the image's render
+// object registry (0x020a0f80) and instance counter (0x020a0f60). Same allocations in the same
+// order as the original.
 uint32_t RopeSolver::createParticles(unsigned capacity) {
+    if (!verifyNative()) return createParticlesNative(capacity);
+    const std::vector<uint8_t> before(vm_base + particleBase, vm_base + particleEnd);
+    const std::vector<uint8_t> globalsBefore(vm_base + 0x020a0f60, vm_base + 0x020a0f90);
+    const auto blocks = particleBlocks, holes = particleFree;
+    const auto cursor = particleCursor;
+    const auto buffers = vertexBuffers;
+    const auto original = createParticlesOriginal(capacity);
+    const std::vector<uint8_t> arena(vm_base + particleBase, vm_base + particleEnd);
+    const std::vector<uint8_t> globals(vm_base + 0x020a0f60, vm_base + 0x020a0f90);
+    const auto originalBlocks = particleBlocks, originalHoles = particleFree;
+    const auto originalCursor = particleCursor;
+    const auto originalBuffers = vertexBuffers;
+    std::memcpy(vm_base + particleBase, before.data(), before.size());
+    std::memcpy(vm_base + 0x020a0f60, globalsBefore.data(), globalsBefore.size());
+    particleBlocks = blocks; particleFree = holes; particleCursor = cursor; vertexBuffers = buffers;
+    const auto system = createParticlesNative(capacity);
+    reportDifference("particle system", vm_base + particleBase, arena.data(), arena.size());
+    reportDifference("particle system globals", vm_base + 0x020a0f60, globals.data(), globals.size());
+    if (system != original || particleBlocks != originalBlocks || particleFree != originalHoles ||
+        particleCursor != originalCursor || vertexBuffers != originalBuffers)
+        std::fprintf(stderr, "native particle system: 1 bytes differ (allocator)\n");
+    return system;
+}
+
+uint32_t RopeSolver::createParticlesNative(unsigned capacity) {
+    const auto system = particleAllocate(0x1980, 0x80);
+    // Adapter memory manager the original's allocations go through (see createParticlesOriginal).
+    const auto handles = particleAllocate(16, 16), manager = particleAllocate(0x40, 16);
+    const auto vtable = particleAllocate(0x40, 16), opd = particleAllocate(16, 16);
+    vm_write32(opd, nativeAllocate);
+    vm_write32(vtable + 0x14, opd);
+    vm_write32(manager, vtable);
+    vm_write32(manager + 8, 1);
+    vm_write32(handles, manager);
+    vm_write32(handles + 4, manager);
+    const uint32_t count = (capacity + 511) & ~511u;
+    vm_write32(system, 0x0209d8f0);
+    vm_write32(0x020a0f60, vm_read32(0x020a0f60) + 1);
+    vm_write32(system + 0x2c, 15);     // two empty names (short strings, capacity 15)
+    vm_write32(system + 0x4c, 15);
+    vm_write32(system + 0x54, count);
+    for (uint32_t array : {system + 0x60, system + 0x80}) {   // front and back particle arrays
+        const auto particles = particleAllocate(count * 0x30, 0x80);
+        for (uint32_t i = 0; i < count; ++i) {
+            writeFloat(particles + i * 0x30 + 0xc, -666.0f);
+            writeFloat(particles + i * 0x30 + 0x2c, 1.0f);
+        }
+        vm_write32(array, particles);
+        vm_write32(array + 4, count);
+        vm_write32(array + 0x10, particles);
+        vm_write32(array + 0x14, count);
+        vm_write32(array + 0x18, count);
+    }
+    vm_write32(system + 0xa0, system + 0x60);
+    vm_write32(system + 0xa4, system + 0x80);
+    particleSimulationDefaults(system + 0x100);
+    particleSimulationDefaults(system + 0xa00);
+    const auto freeList = particleAllocate(count * 4, 0x80);
+    for (uint32_t i = 0; i < count; ++i) vm_write32(freeList + i * 4, i);
+    vm_write32(system + 0x1300, freeList);
+    vm_write32(system + 0x1304, count);
+    vm_write32(system + 0x1310, freeList);
+    vm_write32(system + 0x1314, count);
+    vm_write32(system + 0x1318, count);
+    const auto sorted = uint32_t(int64_t(float(count * 4) * 0.100000001f));
+    const auto sortBuffer = particleAllocate(sorted * 24, 16);
+    vm_write32(system + 0x132c, sorted);
+    vm_write32(system + 0x1330, 1);
+    vm_write32(system + 0x1334, sortBuffer);
+    vm_write32(system + 0x1338, sorted);
+    for (unsigned i = 0; i < 5; ++i) writeFloat(system + 0x1340 + i * 4, 1.0f);   // colour, intensity
+    vm_write32(system + 0x1354, 0xffffffffu);
+    for (uint32_t block : {0x1360u, 0x1490u, 0x15c0u}) particleParameterDefaults(system + block);
+    // Command queue 0x0205cd14: three 4-byte channels, 1536 bytes of storage.
+    const auto queue = particleAllocate(0x600, 1);
+    for (unsigned i = 0; i < 3; ++i) vm_write32(system + 0x1724 + i * 0x28, 4);
+    vm_write32(system + 0x179c, 1);
+    vm_write32(system + 0x17bc, queue);
+    vm_write32(system + 0x1858, queue);
+    vm_write32(system + 0x185c, 0x5ff);
+    // Render object 0x0205eb00, held by the system, the registry and the adapter.
+    const auto render = particleAllocate(0x54, 16);
+    createRenderObject(render, count);
+    vm_write32(render + 8, 3);
+    vm_write8(render + 0xc, 1);
+    vm_write32(system + 0x16f0, render);
+    vm_write32(system + 0x17c0, vm_read32(render + 0x44));
+    vm_write32(system + 0x17c4, vm_read32(render + 0x44));
+    if (vm_read32(0x020a0f80)) throw std::runtime_error("Unadapted second original particle system");
+    const auto registry = particleAllocate(4, 4);
+    vm_write32(registry, render);
+    vm_write32(0x020a0f80, registry);
+    vm_write32(0x020a0f84, registry + 4);
+    vm_write32(0x020a0f88, registry + 4);
+    return system;
+}
+
+uint32_t RopeSolver::createParticlesOriginal(unsigned capacity) {
     auto& cpu = state_->particleCpu;
     const auto system = particleAllocate(0x1980, 0x80), handles = particleAllocate(16, 16);
     // Both handles name one memory manager whose vtable slot 5 allocates natively.
@@ -895,6 +1058,45 @@ RopeSolver::Matrix RopeSolver::inverseCameraView() const {
     return r;
 }
 
+// ParticlesLayer constructor 0x020322b8 as the state it leaves: the camera reference, the
+// flow decay and weave spring constants, two 16-entry motion histories (+0x200 positions,
+// +0x400 deltas), two shake axes (+0x700 on x, +0xb80 on w; 64-entry residual rings, 5-entry
+// intercept rings), the tilt direction "none", the handler flags (+0x1003..+0x1006) and an
+// empty animation list (+0x1018, a sentinel node).
+uint32_t RopeSolver::particleLayerNative(uint32_t cameraHandle) {
+    const uint32_t camera = vm_read32(cameraHandle);
+    const auto layer = particleAllocate(0x1100, 16);
+    vm_write32(layer, 0x0209d4a8);
+    vm_write32(camera + 8, vm_read32(camera + 8) + 1);
+    vm_write32(layer + 0xb0, camera);
+    writeFloat(layer + 0xbc, 0.980000019f);
+    writeFloat(layer + 0xc0, 1.0f);
+    writeFloat(layer + 0x190, 0.0299999993f);
+    vm_write32(layer + 0x1c0, 4);
+    writeFloat(layer + 0x1d0, 0.0399999991f);
+    vm_write8(layer + 0x1e4, 1);
+    for (uint32_t history : {0x200u, 0x400u}) {
+        vm_write32(layer + history + 0x100, 16);
+        vm_write32(layer + history + 0x184, 1);
+    }
+    for (const auto& [axis, component] : {std::pair{0x700u, 0u}, std::pair{0xb80u, 3u}}) {
+        const uint32_t X = layer + axis;
+        vm_write32(X, component);
+        vm_write32(X + 0x180, 64);
+        vm_write32(X + 0x204, 1);
+        vm_write32(X + 0x314, 5);
+        vm_write32(X + 0x384, 1);
+        writeFloat(X + 0x408, 1.0f);
+    }
+    for (uint32_t flag = 0x1003; flag <= 0x1006; ++flag) vm_write8(layer + flag, 1);
+    const auto list = particleAllocate(0x40, 16);
+    for (unsigned i = 0; i < 3; ++i) vm_write32(list + i * 4, list);
+    vm_write8(list + 0x30, 1);
+    vm_write8(list + 0x31, 1);
+    vm_write32(layer + 0x1018, list);
+    return layer;
+}
+
 uint32_t RopeSolver::createParticleLayer(uint32_t system) {
     auto& cpu = state_->particleCpu;
     // Camera (constructor 0x02024a68): near, far, FOV constants, eye/target/up.
@@ -904,12 +1106,28 @@ uint32_t RopeSolver::createParticleLayer(uint32_t system) {
     writeFloat(camera + 0x14, 16.0f / 9.0f);
     std::memcpy(vm_base + camera + 0x60, vm_base + 0x02093730, 48);
     vm_write32(handles, camera);
-    // Original ParticlesLayer constructor 0x020322b8(this, camera, ...); init attaches the system.
-    const auto layer = particleAllocate(0x1100, 16);
-    cpu.gpr[3] = layer;
-    cpu.gpr[4] = handles;
-    cpu.gpr[5] = cpu.gpr[6] = cpu.gpr[7] = handles + 4;
-    moyou_rope_func_020322B8(&cpu); drain(&cpu);
+    // ParticlesLayer constructor 0x020322b8(this, camera, ...); init attaches the system.
+    uint32_t layer;
+    if (!verifyNative()) layer = particleLayerNative(handles);
+    else {
+        const std::vector<uint8_t> before(vm_base + particleBase, vm_base + particleEnd);
+        const auto blocks = particleBlocks, holes = particleFree;
+        const auto cursor = particleCursor;
+        layer = particleAllocate(0x1100, 16);
+        cpu.gpr[3] = layer;
+        cpu.gpr[4] = handles;
+        cpu.gpr[5] = cpu.gpr[6] = cpu.gpr[7] = handles + 4;
+        moyou_rope_func_020322B8(&cpu); drain(&cpu);
+        const std::vector<uint8_t> arena(vm_base + particleBase, vm_base + particleEnd);
+        const auto originalBlocks = particleBlocks, originalHoles = particleFree;
+        const auto originalCursor = particleCursor;
+        std::memcpy(vm_base + particleBase, before.data(), before.size());
+        particleBlocks = blocks; particleFree = holes; particleCursor = cursor;
+        const auto native = particleLayerNative(handles);
+        reportDifference("particle layer", vm_base + particleBase, arena.data(), arena.size());
+        if (native != layer || particleBlocks != originalBlocks || particleFree != originalHoles || particleCursor != originalCursor)
+            std::fprintf(stderr, "native particle layer: 1 bytes differ (allocator)\n");
+    }
     vm_write32(layer + 0x18, system);
     // Animated colour (current +0xd0, from +0xe0, to +0xf0) and intensity (+0x120/+0x124/+0x128)
     // start at 0 and are faded in by the XMB boot animations. Start after the fade-in, at the
