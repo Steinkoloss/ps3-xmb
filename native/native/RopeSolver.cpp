@@ -959,7 +959,7 @@ unsigned RopeSolver::particleFrame(uint32_t system, uint32_t layer, const std::v
         const auto* now = vm_base + particleBase;
         size_t differences = 0, first = 0;
         for (size_t i = 0; i < original.size(); ++i)
-            if (now[i] != original[i] && !(i >= system + 0x1740 - particleBase && i < system + 0x17b0 - particleBase))
+            if (now[i] != original[i])
                 { if (!differences++) first = i; }
         static unsigned frame = 0;
         ++frame;
@@ -1614,17 +1614,127 @@ float vminf(float x, float y) {
 }
 }
 
+namespace {
+// Profiling timers (0x0205c9c8 start, 0x0205c8d4 stop): the system time import is 0 here, so
+// every sample is 0 s; running sum/min/max and a period average (0x02059464) as the firmware.
+void timerStart(uint32_t timer) { vm_write64(timer, 0); vm_write8(timer + 0x20, 1); }
+void timerStop(uint32_t timer) {
+    if (!vm_read8(timer + 0x20)) return;
+    const float elapsed = 0.0f / 1000000.0f;
+    const uint32_t s = timer + 8;
+    const auto count = int32_t(vm_read32(s + 8));
+    if (count == 0) {
+        writeFloat(s, elapsed); writeFloat(s + 0x10, elapsed); writeFloat(s + 0x14, elapsed);
+    } else {
+        writeFloat(s, readFloat(s) + elapsed);
+        const float low = readFloat(s + 0x10), high = readFloat(s + 0x14);
+        writeFloat(s + 0x10, elapsed < low ? elapsed : low);
+        writeFloat(s + 0x14, elapsed > high ? elapsed : high);
+    }
+    const auto next = count + 1;
+    if (next == int32_t(vm_read32(s + 4))) {
+        vm_write32(s + 8, 0);
+        writeFloat(s + 0xc, readFloat(s) / float(next));
+    } else vm_write32(s + 8, uint32_t(next));
+    vm_write8(timer + 0x20, 0);
+}
+void copyBytes(uint32_t destination, uint32_t source, uint32_t size) { std::memmove(vm_base + destination, vm_base + source, size); }
+}
+
+// 0x0205ca80: clear the current buffer's draw count, start the frame timer.
+void RopeSolver::particleBegin(uint32_t system) {
+    const uint32_t render = vm_read32(system + 0x16f0);
+    vm_write32(vm_read32(render + 0x44 + vm_read32(system + 0x16f4) * 4), 0);
+    timerStart(system + 0x1790);
+}
+
+// 0x0205cad0: the command queue (sys+0x1328: count, capacity, entries of 24 bytes): type 0
+// allocates from the free list, 1 sets a position, 2 sets a velocity, 3 adds to it, 4 sets
+// its w; skipped (but cleared) while sys+0x920 is set.
+void RopeSolver::particleCommands(uint32_t system) {
+    const uint32_t queue = system + 0x1328;
+    const auto count = int32_t(vm_read32(queue));
+    writeFloat(system + 0x1900, float(count) / float(int32_t(vm_read32(queue + 4))));
+    timerStart(system + 0x1718);
+    const uint32_t records = vm_read32(vm_read32(system + 0xa4) + 0x10);
+    const auto record = [&](int32_t index) { return records + uint32_t(index) * 48; };
+    if (!vm_read8(system + 0x920))
+        for (int32_t i = 0; i < count; ++i) {
+            const uint32_t command = vm_read32(queue + 0xc) + uint32_t(i) * 24;
+            if (vm_read32(command) == 0) {
+                // 0x0205b6bc: pop a free index (0x02059228), w = 1, then zero position and velocity.
+                vm_write32(system + 0x1354, 0xffffffffu);
+                const uint32_t freeCount = vm_read32(system + 0x1314);
+                if (freeCount) {
+                    vm_write32(system + 0x1354, vm_read32(vm_read32(system + 0x1310) + freeCount * 4 - 4));
+                    vm_write32(system + 0x1314, freeCount - 1);
+                    writeFloat(record(int32_t(vm_read32(system + 0x1354))) + 12, 1.0f);
+                }
+                const auto index = int32_t(vm_read32(system + 0x1354));
+                if (index >= 0)
+                    for (uint32_t b = 0; b < 32; b += 4) writeFloat(record(index) + b, 0.0f);
+            }
+            auto index = int32_t(vm_read32(command + 4));
+            if (index < 0) {
+                index = int32_t(vm_read32(system + 0x1354));
+                vm_write32(command + 4, uint32_t(index));
+                if (index < 0) continue;
+            }
+            const float x = readFloat(command + 8), y = readFloat(command + 0xc), z = readFloat(command + 0x10);
+            const uint32_t position = record(index), velocity = position + 16;
+            switch (vm_read32(command)) {
+            case 1: writeFloat(position, x); writeFloat(position + 4, y); writeFloat(position + 8, z); break;
+            case 2: writeFloat(velocity, x); writeFloat(velocity + 4, y); writeFloat(velocity + 8, z); break;
+            case 3:
+                writeFloat(velocity, x + readFloat(velocity)); writeFloat(velocity + 4, y + readFloat(velocity + 4));
+                writeFloat(velocity + 8, z + readFloat(velocity + 8)); writeFloat(velocity + 12, 0.0f + readFloat(velocity + 12));
+                break;
+            case 4: writeFloat(velocity + 12, x); break;
+            default: break;
+            }
+        }
+    vm_write32(queue, 0);
+    timerStop(system + 0x1718);
+}
+
+// 0x0205ca00: start the update timer, take the current vertex buffer, reset its count and
+// snapshot the simulation inputs (sys+0x100) into sys+0xa00 (0x020599bc).
+void RopeSolver::particleSnapshot(uint32_t system) {
+    timerStart(system + 0x1768);
+    const uint32_t render = vm_read32(system + 0x16f0);
+    const auto token = vm_read32(render + 0x1c + vm_read32(system + 0x16f4) * 12) - vertexToken;
+    if (token > 1 || !vertexBuffers[token]) throw std::runtime_error("Unadapted original vertex array");
+    vm_write32(system + 0x1700, vertexBuffers[token]);
+    vm_write32(system + 0x16f8, 0);
+    const uint32_t d = system + 0xa00, s = system + 0x100;
+    copyBytes(d + 16, s + 16, 16);
+    copyBytes(d, s, 16);
+    const uint32_t entries = vm_read32(s + 128 + 0x600);
+    vm_write32(d + 128 + 0x600, entries);
+    copyBytes(d + 128, s + 128, entries * 3);
+    copyBytes(d + 128 + 1664, s + 128 + 1664, 64);
+    copyBytes(d + 128 + 1728, s + 128 + 1728, 64);
+    copyBytes(d + 128 + 1792, s + 128 + 1792, 80);
+    vm_write8(d + 0x820, vm_read8(s + 0x820));
+    copyBytes(d + 2048, s + 2048, 32);
+    copyBytes(d + 2096, s + 2096, 16);
+    copyBytes(d + 2112, s + 2112, 64);
+    copyBytes(d + 2176, s + 2176, 16);
+    copyBytes(d + 0x8ac, s + 0x8ac, 4);
+    copyBytes(d + 2192, s + 2192, 16);
+    copyBytes(d + 2224, s + 2224, 16);
+    copyBytes(d + 0x8a0, s + 0x8a0, 12);
+}
+
 void RopeSolver::particleUpdate(uint32_t system) {
-    auto& cpu = state_->particleCpu;
-    const auto call = [&](void (*function)(ppu_context*), uint32_t r3) { cpu.gpr[3] = r3; function(&cpu); drain(&cpu); };
     // 0x0205ddc8 around its loop.
     vm_write32(system + 0xa4, system + 0x60);
     vm_write32(system + 0xa0, system + 0x60);
-    call(moyou_rope_func_0205CA80, system);
-    call(moyou_rope_func_0205CAD0, system);
-    call(moyou_rope_func_0205CA00, system);
+    particleBegin(system);
+    particleCommands(system);
+    particleSnapshot(system);
     // 0x0205d7b0
-    call(moyou_rope_func_0205C9C8, system + 0x1740);
+    timerStart(system + 0x1740);
     vm_write32(system + 0x1888, 0);
     const uint32_t S = system + 0x100;
     const float invStep = 1.0f * (1.0f / readFloat(S + 0x8b0));
@@ -1693,7 +1803,13 @@ void RopeSolver::particleUpdate(uint32_t system) {
     }
     _mm_setcsr(mxcsr);
     vm_write32(system + 0x1880, vm_read32(system + 0x16f8));
-    call(moyou_rope_func_0205C8D4, system + 0x1740);
-    call(moyou_rope_func_0205C934, system);
-    call(moyou_rope_func_0205C988, system);
+    timerStop(system + 0x1740);
+    // 0x0205c934: flip the double buffer and publish the count; 0x0205c988: counters.
+    vm_write32(system + 0x16f4, 1 - vm_read32(system + 0x16f4));
+    if (vm_read8(system + 0x30)) vm_write32(system + 0x16f8, vm_read32(system + 0x1880));
+    vm_write32(system + 0x16fc, vm_read32(system + 0x16f8));
+    timerStop(system + 0x1768);
+    vm_write32(system + 0x1714, vm_read32(system + 0x1888));
+    vm_write32(system + 0x1710, vm_read32(vm_read32(system + 0xa4) + 0x18));
+    timerStop(system + 0x1790);
 }

@@ -75,6 +75,9 @@ public:
 private:
     void particleUpdate(uint32_t system);
     std::vector<uint8_t> exposureNoise();
+    void particleBegin(uint32_t system);
+    void particleCommands(uint32_t system);
+    void particleSnapshot(uint32_t system);
     struct State;
     std::unique_ptr<State> state_;
     std::unique_ptr<ExposureTables> exposureCache_;
