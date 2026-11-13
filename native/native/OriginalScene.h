@@ -54,6 +54,8 @@ public:
     QImage capture(QSize size) { return display_.capture(size); }
     const std::vector<float>& mesh() const { return frame_.vertices; }
     void setPointer(std::optional<std::array<float,2>> pointer) { simulation_.setPointer(pointer); }
+    // Month colour and time of day (the "clock" preset follows the hour).
+    void setTime(unsigned month, double hour) { simulation_.setHour(hour); display_.setTime(month, hour); }
 private:
     OriginalSimulation simulation_;
     OriginalDisplay display_;

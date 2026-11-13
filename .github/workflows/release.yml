@@ -1,5 +1,7 @@
-# Builds ps3-xmb-installer.run on the oldest supported base (Ubuntu 26.04 LTS: its Qt and
-# glibc are the minimum the installer needs) and attaches it to the release for a v* tag.
+# Builds the installers and attaches them to the release for a v* tag:
+#   ps3-xmb-installer.run  Linux, KDE Plasma 6 (built on Ubuntu 26.04 LTS: its Qt and glibc are
+#                          the minimum the installer needs)
+#   PS3-XMB-Setup.exe      Windows 10/11 x64 (MSYS2 UCRT64 Qt, embeddable Python, Inno Setup)
 name: Installer
 on:
   push:
@@ -33,3 +35,56 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: ps3-xmb-installer.run
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-qt6-base mingw-w64-ucrt-x86_64-qt6-tools unzip
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          cmake -S native -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --target ps3-xmb
+      - name: Deploy
+        run: |
+          mkdir -p dist/tools
+          cp build/ps3-xmb.exe LICENSE dist/
+          windeployqt6 --release --no-translations --no-system-d3d-compiler --no-opengl-sw dist/ps3-xmb.exe
+          # MinGW and Qt dependency DLLs (twice: the plugins' own dependencies too)
+          for pass in 1 2; do
+            find dist -name '*.exe' -o -name '*.dll' | xargs ldd | awk '/ucrt64/ {print $3}' | sort -u |
+              xargs -r -I{} cp -n {} dist/
+          done
+          for file in import_data.py import_firmware.py renderer_image.py translate_shaders.py sce.py qrc.py \
+              cg.py glsl_common.py glsl_fragment.py glsl_vertex.py firmware_inputs.json; do
+            cp native/tools/$file dist/tools/
+          done
+          curl -sSfL -o python.zip https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip
+          unzip -q python.zip -d dist/python
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ps3-xmb-windows
+          path: dist
+      - name: Installer
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          $version = if ($env:GITHUB_REF -like 'refs/tags/v*') { $env:GITHUB_REF_NAME.Substring(1) } else { '0.0.0' }
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" /O. native\windows\installer.iss
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ps3-xmb-windows-setup
+          path: PS3-XMB-Setup.exe
+      - if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: PS3-XMB-Setup.exe

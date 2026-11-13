@@ -82,3 +82,11 @@ if(Qt6Quick_FOUND)
     target_link_libraries(moyou-qml PRIVATE Qt6::Quick moyou-scene)
     target_compile_options(moyou-qml PRIVATE ${MOYOU_WARNINGS})
 endif()
+
+# Standalone app (Windows: behind the desktop icons; elsewhere: a plain window); see windows/.
+find_package(Qt6 6.9 COMPONENTS Widgets)
+if(Qt6Widgets_FOUND)
+    qt_add_executable(ps3-xmb WIN32 windows/main.cpp)
+    target_link_libraries(ps3-xmb PRIVATE moyou-scene Qt6::Widgets)
+    target_compile_options(ps3-xmb PRIVATE ${MOYOU_WARNINGS})
+endif()
