@@ -67,7 +67,8 @@ public:
     void nudgeParticles(uint32_t system, const Matrix& clip, float x, float y, float dx, float dy,
                         float aspect, float radius, float strength);
     uint32_t guestWord(uint32_t address) const;  // development inspection
-    unsigned checkSinCos(unsigned samples);  // native _FSin vs the math module; returns mismatches
+    unsigned checkSinCos(unsigned samples);
+    unsigned checkExp(unsigned samples);  // native expf vs the math module  // native _FSin vs the math module; returns mismatches
     std::vector<uint8_t> guestBytes(uint32_t address, uint32_t size) const;
 private:
     void particleUpdate(uint32_t system);

@@ -109,6 +109,8 @@ void drain(ppu_context* ctx) {
 // The math module's expf, pow, floorf and modf run natively (bit-identical over the live
 // scene: mesh, particle arena and image); MOYOU_LIBM=original runs the firmware's.
 float firmwareSinCos(float x, int which);
+float firmwareExp(float x);
+double firmwarePowInteger(double x, unsigned n);
 bool verifyNative();
 void reportDifference(const char* name, const void* native, const void* original, size_t bytes);
 bool nativeLibm(const char*) {
@@ -256,7 +258,7 @@ void ps3_hle_call(unsigned nid, ppu_context* ctx) {
         }
         firmwareMath(ctx, moyou_math_func_00093B38); return;
     case 0xfcf08193:   // expf
-        if (nativeLibm("expf")) { ctx->fpr[1] = std::exp(float(ctx->fpr[1])); return; }
+        if (nativeLibm("expf")) { ctx->fpr[1] = firmwareExp(float(ctx->fpr[1])); return; }
         firmwareMath(ctx, moyou_math_func_00092D34); return;
     case 0x23b985f7:   // floorf
         if (nativeLibm("floorf")) { ctx->fpr[1] = std::floor(float(ctx->fpr[1])); return; }
@@ -875,6 +877,26 @@ RopeSolver::ParticleUniforms RopeSolver::particleUniforms(uint32_t system) {
 
 uint32_t RopeSolver::guestWord(uint32_t address) const { return vm_read32(address); }
 
+unsigned RopeSolver::checkExp(unsigned samples) {
+    auto& cpu = state_->cpu;
+    unsigned differences = 0;
+    uint32_t seed = 777;
+    const auto check = [&](float x) {
+        if (std::isinf(x) || x > 88.0f || x < -87.0f) return;   // overflow/underflow raise FP exceptions (unadapted)
+        cpu.fpr[1] = x;
+        firmwareMath(&cpu, moyou_math_func_00092D34);
+        const float original = float(cpu.fpr[1]), native = firmwareExp(x);
+        if (std::bit_cast<uint32_t>(original) != std::bit_cast<uint32_t>(native) && !(original != original && native != native))
+            if (differences++ < 8) std::fprintf(stderr, "expf(%a): original %a native %a\n", x, original, native);
+    };
+    for (float x : {0.0f, -0.0f, 1e-30f, -1e-30f, 2e-8f, -2e-8f, 1.0f, -1.0f, 87.0f, -86.9f}) check(x);
+    for (unsigned i = 0; i < samples; ++i) {
+        seed = seed * 1664525u + 1013904223u;
+        check(float(int32_t(seed)) / float(1u << (seed % 31)) * 1e-2f);
+    }
+    return differences;
+}
+
 unsigned RopeSolver::checkSinCos(unsigned samples) {
     // Native _FSin against the math module's for random bit patterns plus edge cases.
     auto& cpu = state_->cpu;
@@ -1197,21 +1219,50 @@ RopeSolver::GlareWeights RopeSolver::glareWeights(Vector radii, float sumPower, 
         writeFloat(toneObject + 0x2b0 + channel * 4,radii[channel]);
     }
     if (!std::isfinite(sumPower) || !std::isfinite(level)) throw std::runtime_error("Invalid original glare parameters");
-    auto& cpu = state_->cpu;
-    cpu.gpr[3] = toneObject;
-    moyou_rope_func_02071384(&cpu); drain(&cpu);
+    // 0x02071384 → 0x02071260 per channel: radius ⌊3σ⌋ − 1, Gaussian taps (0x02070cec)
+    // e^(−x²/2σ²) / (σ·√2π) at x = t − radius, summed in order and normalised.
     GlareWeights result;
+    std::array<std::array<float, 16>, 3> weights{};
+    std::array<int32_t, 3> radius{};
     for (unsigned channel = 0; channel < 3; ++channel) {
-        const auto radius = vm_read32(toneObject + 0x288 + channel * 4);
-        if (radius >= 8) throw std::runtime_error("Original Gaussian exceeds its shader tap count");
-        for (unsigned tap = 0; tap <= radius; ++tap)
-            result.taps[tap][channel] = readFloat(toneObject + 0x1c8 + channel * 64 + (radius + tap) * 4);
+        const float sigma = radii[channel];
+        radius[channel] = int32_t(std::floor(sigma * 3.0f)) - 1;
+        if (radius[channel] < 0 || radius[channel] >= 8) throw std::runtime_error("Original Gaussian exceeds its shader tap count");
+        float sum = 0;
+        const int32_t count = radius[channel] * 2 + 1;
+        for (int32_t t = 0; t < count; ++t) {
+            const float x = float(t) - float(radius[channel]);
+            const float g = firmwareExp((-x * x) / (sigma * (sigma + sigma))) / (sigma * 2.50662827f);
+            weights[channel][t] = g;
+            sum = sum + g;
+        }
+        for (int32_t t = 0; t < count; ++t) weights[channel][t] = weights[channel][t] / sum;
+        for (int32_t tap = 0; tap <= radius[channel]; ++tap) result.taps[tap][channel] = weights[channel][radius[channel] + tap];
     }
+    if (verifyNative()) {
+        auto& cpu = state_->cpu;
+        cpu.gpr[3] = toneObject;
+        moyou_rope_func_02071384(&cpu); drain(&cpu);
+        for (unsigned channel = 0; channel < 3; ++channel) {
+            const auto original = vm_read32(toneObject + 0x288 + channel * 4);
+            std::array<float, 16> taps{};
+            for (unsigned t = 0; t < 2 * original + 1 && t < 16; ++t) taps[t] = readFloat(toneObject + 0x1c8 + channel * 64 + t * 4);
+            reportDifference("glare radius", &radius[channel], &original, 4);
+            reportDifference("glare taps", weights[channel].data(), taps.data(), sizeof taps);
+        }
+    }
+    auto& cpu = state_->cpu;
     float sum = 0;
     for (unsigned i = 0; i < 6; ++i) {
         cpu.fpr[1] = sumPower; cpu.fpr[2] = i;
-        if (nativeLibm("pow")) cpu.fpr[1] = std::pow(double(sumPower), double(i));
-        else firmwareMath(&cpu,moyou_math_func_00093F94);
+        if (nativeLibm("pow")) {
+            const double native = firmwarePowInteger(double(sumPower), i);
+            if (verifyNative()) {
+                firmwareMath(&cpu,moyou_math_func_00093F94);
+                reportDifference("glare level pow", &native, &cpu.fpr[1], sizeof native);
+            }
+            cpu.fpr[1] = native;
+        } else firmwareMath(&cpu,moyou_math_func_00093F94);
         result.levels[i] = static_cast<float>(cpu.fpr[1]);
         sum = static_cast<float>(double(sum) + cpu.fpr[1]);
     }
@@ -1313,6 +1364,53 @@ uint16_t half(float value) {
     if (int32_t(e) > 0x8e) h = 0x7c00;
     return uint16_t((h & 0x7fff) | ((x >> 16) & 0x8000));
 }
+// Math module pow (0x93f94, Dinkumware) for x > 0 normal and a small non-negative integer
+// exponent n, the glare level weights' only use: x = m·2^e with m moved into [√½, √2), m^n by
+// binary exponentiation in double precision (skipped when m is 1), then scaled by 2^(n·e)
+// (_Dexp of 0 → _Dscale, exact for normal results).
+double firmwarePowInteger(double x, unsigned n) {
+    if (n == 0) return 1.0;
+    int e;
+    double m = std::frexp(x, &e);
+    if (m < 0.7071067811865476) { m = m + m; --e; }
+    const int k = int(double(n) * double(e));
+    double p = 1.0;
+    if (m != 1.0)
+        for (double b = m;;) {
+            if (n & 1) p = p * b;
+            n >>= 1;
+            if (!n) break;
+            b = b * b;
+        }
+    return std::ldexp(p, k);
+}
+
+// Math module expf (0x92d34 → Dinkumware _FExp 0x95bf4): NaN returns itself, ±infinity
+// gives +infinity / 0, zero gives 1, |x| > 229 saturates. Otherwise n = trunc(x·log2(e) ± ½)
+// as a 16-bit integer, g = x − n·ln2 in two parts, e^g as (a + b + 1)/(a − b + 1) in double
+// precision (1 when |g| < 2^-25), then scaled by 2^n (_FDscale; exact for normal results).
+float firmwareExp(float x) {
+    if (x != x) return x;
+    if (std::isinf(x)) return x < 0 ? 0.0f : x;
+    if (x == 0) return 1.0f;
+    if (x < -229.0f) return 0.0f;
+    if (x > 229.0f) return std::numeric_limits<float>::infinity();
+    float g = x * 1.44269502f;
+    g = (g < 0.0f ? -0.5f : 0.5f) + g;
+    const int16_t n = int16_t(int32_t(g));
+    const float k = float(n);
+    float r = std::fma(k, -0.693147063f, x);
+    r = std::fma(k, -1.17304637e-07f, r);
+    constexpr float tiny = 2.98023224e-08f;
+    float value = 1.0f;
+    if (!(-tiny < r && r < tiny)) {
+        const float r2 = r * r;
+        const float a = r2 * 0.0999748558f, b = r * std::fma(r2, 0.00832082611f, 0.5f);
+        value = float(((double(a) + double(b)) + 1.0) / ((double(a) - double(b)) + 1.0));
+    }
+    return std::ldexp(value, n);
+}
+
 // Math module 0x95f60 (_FSin; sine for which = 0, cosine for 1). Classified first (0x95ad8):
 // NaN returns itself, infinity the default NaN, zero returns itself (sine) or 1 (cosine).
 // |x| > 40.7 is first reduced with the module's fmodf (0x93284, exact, so equal to IEEE

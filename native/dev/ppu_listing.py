@@ -14,15 +14,19 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("work", type=Path); p.add_argument("address"); p.add_argument("--depth", type=int, default=1)
     p.add_argument("--recompiler", type=Path, default=None)
+    p.add_argument("--math", action="store_true", help="list from the VSH math module image")
     a = p.parse_args()
     root = a.recompiler or a.work.parent / "third_party" / "ps3recomp"
     sys.path.insert(0, str(root / "tools"))
     from ppu_disasm import decode
     cpu = a.work / "cpu-particles"
     manifest = json.loads((cpu / "manifest.json").read_text())
-    image = (cpu / "renderer-image.bin").read_bytes()
-    base = 0x02000000
-    bounds = {int(f["start"], 16): int(f["end"], 16) for f in manifest["rope_functions"]}
+    if a.math:
+        image = (cpu / "math-image.bin").read_bytes(); base = 0
+        bounds = {int(f["start"], 16): int(f["end"], 16) for f in manifest["math_functions"]}
+    else:
+        image = (cpu / "renderer-image.bin").read_bytes(); base = 0x02000000
+        bounds = {int(f["start"], 16): int(f["end"], 16) for f in manifest["rope_functions"]}
     imports = {}
     imp = a.work / "lifted" / "renderer" / "custom_render_plugin_imports.json"
     if imp.exists():
@@ -35,7 +39,7 @@ def main():
             elif isinstance(o, list):
                 for v in o: walk(v)
         walk(data)
-    toc = 0x020a7d70
+    toc = 0x006f5558 if a.math else 0x020a7d70
     def word(addr): return struct.unpack(">I", image[addr - base:addr - base + 4])[0]
     def floatat(addr):
         if base <= addr < base + len(image) - 4:
@@ -54,7 +58,7 @@ def main():
             note = ""
             mn = text.split()[0] if text else ""
             ops = text[len(mn):].replace(" ", "").split(",")
-            if mn == "lis": hi[ops[0]] = int(ops[1], 0) << 16
+            if mn == "lis": hi[ops[0]] = (int(ops[1], 0) << 16) & 0xffffffff
             if mn in ("lfs", "lfd", "lwz", "addi") and len(ops) >= 2 and "(" in ops[-1] or mn == "addi":
                 try:
                     if mn == "addi":

@@ -29,7 +29,8 @@ int main(int argc, char** argv) {
         {"output","361 x 4 float32 little-endian render-grid checkpoint.","file"},
         {"particles","Development: construct the original particle system and report.","capacity"},
         {"noise-check","Compare native exposure noise with the original for N frames.","frames"},
-        {"sincos-check","Compare native _FSin with the math module for N inputs.","count"}});
+        {"sincos-check","Compare native _FSin with the math module for N inputs.","count"},
+        {"expf-check","Compare native expf with the math module for N inputs.","count"}});
     parser.process(app);
     try {
         bool valid;
@@ -41,6 +42,11 @@ int main(int argc, char** argv) {
             if (!rope.checkExposureNoise(parser.value("noise-check").toUInt())) throw std::runtime_error("Native exposure noise differs");
             std::printf("exposure noise identical\n");
             return 0;
+        }
+        if (parser.isSet("expf-check")) {
+            const auto mismatches = rope.checkExp(parser.value("expf-check").toUInt());
+            std::printf("expf mismatches: %u\n", mismatches);
+            return mismatches ? 1 : 0;
         }
         if (parser.isSet("sincos-check")) {
             const auto mismatches = rope.checkSinCos(parser.value("sincos-check").toUInt());
