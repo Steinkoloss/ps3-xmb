@@ -80,14 +80,14 @@ jobs:
         run: |
           # The first start as a user sees it: firmware from Sony, then the app behind the icons.
           $data = "$env:LOCALAPPDATA\ps3-xmb"
-          test\python\python.exe test\tools\import_data.py --output $data
+          dist\python\python.exe dist\tools\import_data.py --output $data
           if ($LASTEXITCODE) { throw "import failed" }
           Get-Process explorer -ErrorAction SilentlyContinue | Select-Object Id, SessionId | Format-Table
           # In a normal window first, then attached behind the icons as users get it.
           foreach ($mode in @('window', 'desktop')) {
             $arguments = @('--snapshot', "$pwd\snapshot-$mode.png")
             if ($mode -eq 'window') { $arguments += '--window' }
-            $app = Start-Process test\ps3-xmb.exe -ArgumentList $arguments -PassThru
+            $app = Start-Process dist\ps3-xmb.exe -ArgumentList $arguments -PassThru
             for ($i = 0; $i -lt 120 -and -not (Test-Path "snapshot-$mode.png") -and -not $app.HasExited; $i++) { Start-Sleep 1 }
             Start-Sleep 2
             "--- ${mode}: exited=$($app.HasExited) code=$($app.ExitCode)"
