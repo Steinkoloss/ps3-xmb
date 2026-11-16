@@ -373,6 +373,7 @@ int main(int argc, char** argv) {
         }
     }
 
+    qInfo("Creating the wallpaper window");
     Wallpaper wallpaper(dataDirectory(), parser.value("snapshot"));
     const QRect desktop = virtualDesktop();
 #ifdef _WIN32
@@ -397,6 +398,7 @@ int main(int argc, char** argv) {
         wallpaper.show();
     }
 
+    qInfo("Window shown; starting the tray icon");
     QSystemTrayIcon tray(trayIcon());
     QMenu menu;
     auto* pause = menu.addAction("Pause");

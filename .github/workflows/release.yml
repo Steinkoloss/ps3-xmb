@@ -85,6 +85,8 @@ jobs:
           ls test | grep -i -E "gallium|opengl|llvm" || true
       - name: Test on the Windows desktop
         shell: pwsh
+        env:
+          GALLIUM_DRIVER: llvmpipe
         run: |
           # The first start as a user sees it: firmware from Sony, then the app behind the icons.
           $data = "$env:LOCALAPPDATA\ps3-xmb"
