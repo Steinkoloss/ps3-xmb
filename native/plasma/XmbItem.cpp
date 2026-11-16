@@ -479,7 +479,7 @@ void XmbItem::restart() {
     if (!error_.isEmpty()) { error_.clear(); emit errorChanged(); }
     auto data = dataDirectory_;
     if (data.isEmpty()) data = QStandardPaths::locate(QStandardPaths::GenericDataLocation,"ps3-xmb",QStandardPaths::LocateDirectory);
-    if (data.isEmpty()) { fail("Install the local firmware-derived data to ~/.local/share/ps3-xmb"); return; }
+    if (data.isEmpty()) { fail("PS3 data missing: run ps3-xmb-import once (downloads it from Sony), or the installer"); return; }
     // The base menus lack the background's day/night entries; the console always applies a
     // set, so an unset preset follows the clock like the console.
     simulator_ = XmbSimulator::acquire(data,preset_.isEmpty() ? QStringLiteral("clock") : preset_,hour_);

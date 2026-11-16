@@ -3,9 +3,8 @@
 // behind the desktop icons on Windows (the WorkerW layer that Explorer paints the wallpaper
 // in), with a tray icon. On first start it imports the renderer's data from Sony's PS3 system
 // software (downloaded from Sony unless a PS3UPDAT.PUP is given) with the bundled Python.
-//   ps3-xmb [--window] [--import PS3UPDAT.PUP] [--snapshot frame.png] [--software-gl]
-// Without OpenGL 4.3 from the graphics driver (virtual machines, old GPUs) it restarts itself
-// on the bundled software renderer (opengl32sw.dll).
+//   ps3-xmb [--window] [--import PS3UPDAT.PUP] [--snapshot frame.png]
+// It needs OpenGL 4.3 from the graphics driver and says so when the driver has less.
 #include "OriginalScene.h"
 #include <QApplication>
 #include <QCommandLineParser>
@@ -48,7 +47,6 @@ namespace {
 QString dataDirectory() {
     return QDir(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)).filePath("ps3-xmb");
 }
-bool relaunchInSoftware = false;   // set when the driver's OpenGL is too old
 bool imported() { return QFile::exists(QDir(dataDirectory()).filePath("cpu/renderer-image.bin")); }
 double hourNow() { return QTime::currentTime().msecsSinceStartOfDay() / 3.6e6; }
 
@@ -122,11 +120,14 @@ private:
             qInfo("OpenGL %s, %s, %s", reinterpret_cast<const char*>(gl->glGetString(GL_VERSION)),
                   reinterpret_cast<const char*>(gl->glGetString(GL_RENDERER)), reinterpret_cast<const char*>(gl->glGetString(GL_VENDOR)));
             const auto version = context()->format().version();
-            if (version < qMakePair(4, 3) && !QCoreApplication::testAttribute(Qt::AA_UseSoftwareOpenGL) &&
-                QFile::exists(QDir(QCoreApplication::applicationDirPath()).filePath("opengl32sw.dll"))) {
-                qWarning("OpenGL %d.%d is below 4.3: restarting on the software renderer", version.first, version.second);
-                relaunchInSoftware = true;
-                QTimer::singleShot(0, qApp, &QApplication::quit);
+            if (version < qMakePair(4, 3)) {
+                const auto message = QString("Your graphics driver offers OpenGL %1.%2; the wallpaper needs OpenGL 4.3.\n\n"
+                    "Install or update the driver for your graphics card (any GPU from about 2012 on has it). "
+                    "Virtual machines and Remote Desktop sessions usually don't provide it.")
+                    .arg(version.first).arg(version.second);
+                qCritical("%s", qPrintable(message));
+                QMessageBox::critical(nullptr, "PS3 XMB", message);
+                QApplication::exit(1);
                 return;
             }
             const QDir data(data_);
@@ -151,10 +152,18 @@ private:
             if (QRect(QPoint(), size()).contains(cursor))
                 scene_->setPointer(std::array<float,2>{2.0f * cursor.x() / width() - 1, 1 - 2.0f * cursor.y() / height()});
             else scene_->setPointer(std::nullopt);
+            QElapsedTimer work;
+            work.start();
             const auto size = this->size() * devicePixelRatio();
             scene_->advance(std::min(0.25, clock_.nsecsElapsed() / 1e9), size);
             clock_.restart();
             scene_->render(defaultFramebufferObject(), size);
+            // Frame cost in the log every 600 frames.
+            spent_ += work.nsecsElapsed();
+            if (++counted_ == 600) {
+                qInfo("%dx%d: %.2f ms per frame", size.width(), size.height(), spent_ / 600 / 1e6);
+                spent_ = 0; counted_ = 0;
+            }
             // Testing: save the 300th frame (about five seconds in) and quit.
             if (!snapshot_.isEmpty() && ++frames_ == 300) {
                 grabFramebuffer().save(snapshot_);
@@ -170,6 +179,8 @@ private:
         if (!paused_) update();
     }
     QString data_, snapshot_;
+    qint64 spent_ = 0;
+    unsigned counted_ = 0;
     unsigned frames_ = 0;
     std::unique_ptr<OriginalScene> scene_;
     QElapsedTimer clock_, minutes_;
@@ -293,8 +304,6 @@ int main(int argc, char** argv) {
     format.setSwapInterval(1);
     QSurfaceFormat::setDefaultFormat(format);
     qInstallMessageHandler(logMessage);
-    for (int i = 1; i < argc; ++i)
-        if (!std::strcmp(argv[i], "--software-gl")) QCoreApplication::setAttribute(Qt::AA_UseSoftwareOpenGL);
     QApplication application(argc, argv);
     application.setApplicationName("PS3 XMB");
     qInfo("PS3 XMB starting (%s)", qPrintable(QSysInfo::prettyProductName()));
@@ -304,8 +313,7 @@ int main(int argc, char** argv) {
     parser.addHelpOption();
     parser.addOptions({{"window", "Show in a normal window instead of behind the desktop icons"},
                        {"import", "Import from this PS3UPDAT.PUP instead of downloading", "file"},
-                       {"snapshot", "Testing: save the 300th frame to this PNG file and quit", "file"},
-                       {"software-gl", "Draw with the bundled software OpenGL renderer"}});
+                       {"snapshot", "Testing: save the 300th frame to this PNG file and quit", "file"}});
     parser.process(application);
 
     QLockFile lock(QDir(QDir::tempPath()).filePath("ps3-xmb.lock"));
@@ -369,12 +377,5 @@ int main(int argc, char** argv) {
     const int result = application.exec();
     wallpaper.destroy();
     restoreDesktop();
-    if (relaunchInSoftware) {
-        lock.unlock();
-        QStringList arguments = QCoreApplication::arguments().mid(1);
-        arguments << "--software-gl";
-        QProcess::startDetached(QCoreApplication::applicationFilePath(), arguments);
-        return 0;
-    }
     return result;
 }

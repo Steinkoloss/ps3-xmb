@@ -1,0 +1,4 @@
+post_install() {
+    echo "PS3 XMB: run 'ps3-xmb-import' once as your user (downloads the data from Sony),"
+    echo "then pick PS3 XMB Waves in Desktop and Wallpaper (restart Plasma if it is not listed)."
+}

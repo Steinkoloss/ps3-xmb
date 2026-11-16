@@ -1,0 +1,36 @@
+# Maintainer: Steinkoloss <113576483+Steinkoloss@users.noreply.github.com>
+pkgname=ps3-xmb
+pkgver=0.3.0
+pkgrel=1
+pkgdesc="PS3 XMB wave background as a KDE Plasma 6 wallpaper (data taken from Sony's free PS3 firmware)"
+arch=(x86_64)
+url=https://github.com/Steinkoloss/ps3-xmb
+license=(GPL-2.0-or-later)
+depends=(qt6-base qt6-declarative plasma-workspace python openssl)
+makedepends=(cmake ninja)
+install=ps3-xmb.install
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=(SKIP)
+
+build() {
+    cmake -S "$pkgname-$pkgver/native" -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+    cmake --build build --target moyou-qml
+}
+
+package() {
+    local src="$pkgname-$pkgver"
+    install -d "$pkgdir/usr/lib/qt6/qml/PS3Xmb" "$pkgdir/usr/share/plasma/wallpapers" "$pkgdir/usr/share/ps3-xmb/tools"
+    cp -r build/qml/PS3Xmb/. "$pkgdir/usr/lib/qt6/qml/PS3Xmb/"
+    cp -r "$src/native/plasma/package" "$pkgdir/usr/share/plasma/wallpapers/org.ps3xmb.waves"
+    for file in import_data.py import_firmware.py renderer_image.py translate_shaders.py sce.py qrc.py cg.py \
+            glsl_common.py glsl_fragment.py glsl_vertex.py firmware_inputs.json; do
+        install -m644 "$src/native/tools/$file" "$pkgdir/usr/share/ps3-xmb/tools/"
+    done
+    install -Dm755 /dev/stdin "$pkgdir/usr/bin/ps3-xmb-import" <<'SCRIPT'
+#!/bin/sh
+# Take the wallpaper's data from Sony's PS3 system software: downloaded from Sony (about 200 MB,
+# deleted afterwards) unless a PS3UPDAT.PUP is given. Writes ~/.local/share/ps3-xmb.
+exec python3 /usr/share/ps3-xmb/tools/import_data.py "$@" --output "${XDG_DATA_HOME:-$HOME/.local/share}/ps3-xmb"
+SCRIPT
+    install -Dm644 "$src/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
