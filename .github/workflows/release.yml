@@ -91,18 +91,26 @@ jobs:
           test\python\python.exe test\tools\import_data.py --output $data
           if ($LASTEXITCODE) { throw "import failed" }
           Get-Process explorer -ErrorAction SilentlyContinue | Select-Object Id, SessionId | Format-Table
-          Start-Process test\ps3-xmb.exe -ArgumentList '--snapshot', "$pwd\snapshot.png"
-          for ($i = 0; $i -lt 240 -and -not (Test-Path snapshot.png); $i++) { Start-Sleep 1 }
-          Start-Sleep 2
+          # In a normal window first, then attached behind the icons as users get it.
+          foreach ($mode in @('window', 'desktop')) {
+            $arguments = @('--snapshot', "$pwd\snapshot-$mode.png")
+            if ($mode -eq 'window') { $arguments += '--window' }
+            $app = Start-Process test\ps3-xmb.exe -ArgumentList $arguments -PassThru
+            for ($i = 0; $i -lt 120 -and -not (Test-Path "snapshot-$mode.png") -and -not $app.HasExited; $i++) { Start-Sleep 1 }
+            Start-Sleep 2
+            "--- $mode: exited=$($app.HasExited) code=$($app.ExitCode)"
+            if (-not $app.HasExited) { Stop-Process -Id $app.Id -Force }
+            Start-Sleep 1
+          }
           Get-Content "$data\ps3-xmb.log"
           Copy-Item "$data\ps3-xmb.log" .
-          if (-not (Test-Path snapshot.png)) { throw "no frame rendered" }
+          if (-not (Test-Path snapshot-window.png) -or -not (Test-Path snapshot-desktop.png)) { throw "no frame rendered" }
       - if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ps3-xmb-windows-test
           path: |
-            snapshot.png
+            snapshot-*.png
             ps3-xmb.log
       - name: Installer
         shell: pwsh

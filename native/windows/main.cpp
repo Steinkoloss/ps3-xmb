@@ -14,6 +14,7 @@
 #include <QDialog>
 #include <QDir>
 #include <QElapsedTimer>
+#include <QEvent>
 #include <QFileDialog>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -60,6 +61,20 @@ void logMessage(QtMsgType, const QMessageLogContext&, const QString& message) {
 }
 
 #ifdef _WIN32
+// A crash goes to the log with its code and where it happened (module + offset), so a report
+// can be traced back to the source.
+LONG WINAPI logCrash(EXCEPTION_POINTERS* info) {
+    const auto address = reinterpret_cast<uintptr_t>(info->ExceptionRecord->ExceptionAddress);
+    HMODULE module = nullptr;
+    wchar_t name[MAX_PATH] = L"?";
+    if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCWSTR>(address), &module))
+        GetModuleFileNameW(module, name, MAX_PATH);
+    const wchar_t* base = wcsrchr(name, L'\\');
+    qCritical("Crashed: exception %08lx at %ls+%llx", info->ExceptionRecord->ExceptionCode, base ? base + 1 : name,
+              static_cast<unsigned long long>(address - reinterpret_cast<uintptr_t>(module)));
+    return EXCEPTION_CONTINUE_SEARCH;
+}
 // The window Explorer paints the wallpaper in, behind the icons. Asking Progman for 0x052C
 // makes Explorer create it. Before Windows 11 24H2 it is a top-level WorkerW after the one that
 // holds SHELLDLL_DefView; since 24H2 it is a WorkerW child of Progman, and our window goes
@@ -114,6 +129,16 @@ public:
     }
     bool paused() const { return paused_; }
 private:
+    bool event(QEvent* event) override {
+        switch (event->type()) {
+        case QEvent::Close: qInfo("Window: close requested"); break;
+        case QEvent::Hide: qInfo("Window: hidden"); break;
+        case QEvent::Expose: if (!exposed_) qInfo("Window: first shown (%s)", isExposed() ? "visible" : "not visible"); exposed_ = true; break;
+        default: break;
+        }
+        return QOpenGLWindow::event(event);
+    }
+    bool exposed_ = false;
     void initializeGL() override {
         try {
             auto* gl = QOpenGLContext::currentContext()->functions();
@@ -304,6 +329,9 @@ int main(int argc, char** argv) {
     format.setSwapInterval(1);
     QSurfaceFormat::setDefaultFormat(format);
     qInstallMessageHandler(logMessage);
+#ifdef _WIN32
+    SetUnhandledExceptionFilter(logCrash);
+#endif
     QApplication application(argc, argv);
     application.setApplicationName("PS3 XMB");
     qInfo("PS3 XMB starting (%s)", qPrintable(QSysInfo::prettyProductName()));
@@ -374,7 +402,9 @@ int main(int argc, char** argv) {
     QObject::connect(pause, &QAction::toggled, follow);
     watch.start(1000);
 
+    QObject::connect(&application, &QGuiApplication::lastWindowClosed, [] { qInfo("Last window closed"); });
     const int result = application.exec();
+    qInfo("Event loop ended (%d)", result);
     wallpaper.destroy();
     restoreDesktop();
     return result;
