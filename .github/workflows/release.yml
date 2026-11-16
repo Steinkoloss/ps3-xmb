@@ -79,6 +79,10 @@ jobs:
         run: |
           cp -r dist test
           cp "$MINGW_PREFIX/bin/opengl32.dll" test/opengl32sw.dll
+          for pass in 1 2 3; do
+            ldd test/*.dll | awk '/ucrt64/ {print $3}' | sort -u | xargs -r -I{} cp -n {} test/
+          done
+          ls test | grep -i -E "gallium|opengl|llvm" || true
       - name: Test on the Windows desktop
         shell: pwsh
         run: |
