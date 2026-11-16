@@ -335,7 +335,12 @@ int main(int argc, char** argv) {
     parser.process(application);
 
     QLockFile lock(QDir(QDir::tempPath()).filePath("ps3-xmb.lock"));
-    if (!lock.tryLock(100)) return 0;   // already running
+    if (!lock.tryLock(100)) {   // already running: say so instead of starting a second copy
+        qInfo("Already running");
+        QMessageBox::information(nullptr, "PS3 XMB", "PS3 XMB is already running.\n\nIts icon is in the system tray "
+            "(the ^ arrow next to the clock): right-click it to pause or quit.");
+        return 0;
+    }
 
     if (!imported() || parser.isSet("import")) {
         ImportDialog dialog(parser.value("import"));
@@ -404,6 +409,9 @@ int main(int argc, char** argv) {
     tray.setContextMenu(&menu);
     tray.setToolTip("PS3 XMB");
     tray.show();
+    if (parser.value("snapshot").isEmpty())
+        tray.showMessage("PS3 XMB", "The PS3 background is running. Right-click this icon to pause or quit.",
+                         QSystemTrayIcon::Information, 6000);
     QObject::connect(autostart, &QAction::toggled, [](bool on) { setStartWithWindows(on); });
     QObject::connect(quit, &QAction::triggered, &application, &QApplication::quit);
     // Paused by hand, or while a fullscreen app (a game, a video) is in front.

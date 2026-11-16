@@ -75,18 +75,8 @@ jobs:
         with:
           name: ps3-xmb-windows
           path: dist
-      - name: Test copy with Mesa (the runner has no GPU; not shipped)
-        run: |
-          cp -r dist test
-          # App-local opengl32.dll: Mesa llvmpipe with OpenGL 4.5, and its own DLLs
-          cp "$MINGW_PREFIX/bin/opengl32.dll" "$MINGW_PREFIX/bin/libgallium_wgl.dll" test/
-          for pass in 1 2 3; do
-            ldd test/*.dll | awk '/ucrt64/ {print $3}' | sort -u | xargs -r -I{} cp -n {} test/
-          done
       - name: Test on the Windows desktop
         shell: pwsh
-        env:
-          GALLIUM_DRIVER: llvmpipe
         run: |
           # The first start as a user sees it: firmware from Sony, then the app behind the icons.
           $data = "$env:LOCALAPPDATA\ps3-xmb"
