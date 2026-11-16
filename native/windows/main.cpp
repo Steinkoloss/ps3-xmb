@@ -21,6 +21,8 @@
 #include <QLockFile>
 #include <QMenu>
 #include <QMessageBox>
+#include <QOffscreenSurface>
+#include <QOpenGLContext>
 #include <QOpenGLFunctions>
 #include <QOpenGLWindow>
 #include <QPainter>
@@ -38,6 +40,7 @@
 #include <QTime>
 #include <QTimer>
 #include <QVBoxLayout>
+#include <cstdio>
 #include <cstring>
 #include <memory>
 #ifdef _WIN32
@@ -56,8 +59,9 @@ void logMessage(QtMsgType, const QMessageLogContext&, const QString& message) {
     QDir().mkpath(dataDirectory());
     QFile log(QDir(dataDirectory()).filePath("ps3-xmb.log"));
     if (log.size() > (1 << 20)) log.remove();
-    if (log.open(QIODevice::Append | QIODevice::Text))
-        log.write((QDateTime::currentDateTime().toString(Qt::ISODate) + " " + message + "\n").toUtf8());
+    const auto line = (QDateTime::currentDateTime().toString(Qt::ISODate) + " " + message + "\n").toUtf8();
+    if (log.open(QIODevice::Append | QIODevice::Text)) log.write(line);
+    std::fputs(line.constData(), stderr);
 }
 
 #ifdef _WIN32
@@ -141,20 +145,6 @@ private:
     bool exposed_ = false;
     void initializeGL() override {
         try {
-            auto* gl = QOpenGLContext::currentContext()->functions();
-            qInfo("OpenGL %s, %s, %s", reinterpret_cast<const char*>(gl->glGetString(GL_VERSION)),
-                  reinterpret_cast<const char*>(gl->glGetString(GL_RENDERER)), reinterpret_cast<const char*>(gl->glGetString(GL_VENDOR)));
-            const auto version = context()->format().version();
-            if (version < qMakePair(4, 3)) {
-                const auto message = QString("Your graphics driver offers OpenGL %1.%2; the wallpaper needs OpenGL 4.3.\n\n"
-                    "Install or update the driver for your graphics card (any GPU from about 2012 on has it). "
-                    "Virtual machines and Remote Desktop sessions usually don't provide it.")
-                    .arg(version.first).arg(version.second);
-                qCritical("%s", qPrintable(message));
-                QMessageBox::critical(nullptr, "PS3 XMB", message);
-                QApplication::exit(1);
-                return;
-            }
             const QDir data(data_);
             scene_ = std::make_unique<OriginalScene>(data.filePath("shaders"), data.filePath("reference"),
                 data.filePath("cpu"), QString(), "clock", unsigned(QDate::currentDate().month()), hourNow());
@@ -351,6 +341,31 @@ int main(int argc, char** argv) {
         ImportDialog dialog(parser.value("import"));
         if (dialog.exec() != QDialog::Accepted) return 0;
         if (!startsWithWindows()) setStartWithWindows(true);   // default on, switch off in the tray
+    }
+
+    // OpenGL 4.3 first: without it the window would stay empty, so say what is missing.
+    {
+        QOffscreenSurface surface;
+        surface.create();
+        QOpenGLContext probe;
+        const bool created = probe.create() && probe.makeCurrent(&surface);
+        const auto version = created ? probe.format().version() : qMakePair(0, 0);
+        if (created) {
+            auto* gl = probe.functions();
+            qInfo("OpenGL %s, %s, %s", reinterpret_cast<const char*>(gl->glGetString(GL_VERSION)),
+                  reinterpret_cast<const char*>(gl->glGetString(GL_RENDERER)), reinterpret_cast<const char*>(gl->glGetString(GL_VENDOR)));
+            probe.doneCurrent();
+        }
+        if (version < qMakePair(4, 3)) {
+            const auto message = created
+                ? QString("Your graphics driver offers OpenGL %1.%2; the wallpaper needs OpenGL 4.3.").arg(version.first).arg(version.second)
+                : QString("The graphics driver gave no OpenGL at all; the wallpaper needs OpenGL 4.3.");
+            const auto advice = "\n\nInstall or update the driver for your graphics card from AMD, NVIDIA or Intel "
+                "(any GPU from about 2012 on has OpenGL 4.3). Virtual machines and Remote Desktop sessions usually don't provide it.";
+            qCritical("%s", qPrintable(message));
+            QMessageBox::critical(nullptr, "PS3 XMB", message + advice);
+            return 1;
+        }
     }
 
     Wallpaper wallpaper(dataDirectory(), parser.value("snapshot"));

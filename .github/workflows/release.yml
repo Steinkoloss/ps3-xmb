@@ -79,12 +79,14 @@ jobs:
         run: |
           cp -r dist test
           # App-local opengl32.dll: Mesa llvmpipe with OpenGL 4.5, and its own DLLs
-          cp "$MINGW_PREFIX/bin/opengl32.dll" test/
-          for pass in 1 2; do
-            ldd test/opengl32.dll test/*.dll | awk '/ucrt64/ {print $3}' | sort -u | xargs -r -I{} cp -n {} test/
+          cp "$MINGW_PREFIX/bin/opengl32.dll" "$MINGW_PREFIX/bin/libgallium_wgl.dll" test/
+          for pass in 1 2 3; do
+            ldd test/*.dll | awk '/ucrt64/ {print $3}' | sort -u | xargs -r -I{} cp -n {} test/
           done
       - name: Test on the Windows desktop
         shell: pwsh
+        env:
+          GALLIUM_DRIVER: llvmpipe
         run: |
           # The first start as a user sees it: firmware from Sony, then the app behind the icons.
           $data = "$env:LOCALAPPDATA\ps3-xmb"
@@ -98,7 +100,7 @@ jobs:
             $app = Start-Process test\ps3-xmb.exe -ArgumentList $arguments -PassThru
             for ($i = 0; $i -lt 120 -and -not (Test-Path "snapshot-$mode.png") -and -not $app.HasExited; $i++) { Start-Sleep 1 }
             Start-Sleep 2
-            "--- $mode: exited=$($app.HasExited) code=$($app.ExitCode)"
+            "--- ${mode}: exited=$($app.HasExited) code=$($app.ExitCode)"
             if (-not $app.HasExited) { Stop-Process -Id $app.Id -Force }
             Start-Sleep 1
           }
