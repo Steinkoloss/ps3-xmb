@@ -48,7 +48,7 @@ jobs:
           update: true
           install: >-
             mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja
-            mingw-w64-ucrt-x86_64-qt6-base mingw-w64-ucrt-x86_64-qt6-tools unzip
+            mingw-w64-ucrt-x86_64-qt6-base mingw-w64-ucrt-x86_64-qt6-tools mingw-w64-ucrt-x86_64-mesa unzip
       - uses: actions/checkout@v4
       - name: Build
         run: |
@@ -59,6 +59,8 @@ jobs:
           mkdir -p dist/tools
           cp build/ps3-xmb.exe LICENSE dist/
           windeployqt6 --release --no-translations --no-system-d3d-compiler --no-opengl-sw dist/ps3-xmb.exe
+          # Software OpenGL (Mesa llvmpipe) for drivers without OpenGL 4.3: Qt loads opengl32sw.dll
+          cp "$MINGW_PREFIX/bin/opengl32.dll" dist/opengl32sw.dll
           # MinGW and Qt dependency DLLs (twice: the plugins' own dependencies too)
           for pass in 1 2; do
             find dist -name '*.exe' -o -name '*.dll' | xargs ldd | awk '/ucrt64/ {print $3}' | sort -u |
@@ -70,10 +72,32 @@ jobs:
           done
           curl -sSfL -o python.zip https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip
           unzip -q python.zip -d dist/python
+          du -sh dist
       - uses: actions/upload-artifact@v4
         with:
           name: ps3-xmb-windows
           path: dist
+      - name: Test on the Windows desktop
+        shell: pwsh
+        run: |
+          # The first start as a user sees it: firmware from Sony, then the app behind the icons.
+          $data = "$env:LOCALAPPDATA\ps3-xmb"
+          dist\python\python.exe dist\tools\import_data.py --output $data
+          if ($LASTEXITCODE) { throw "import failed" }
+          Get-Process explorer -ErrorAction SilentlyContinue | Select-Object Id, SessionId | Format-Table
+          Start-Process dist\ps3-xmb.exe -ArgumentList '--snapshot', "$pwd\snapshot.png"
+          for ($i = 0; $i -lt 240 -and -not (Test-Path snapshot.png); $i++) { Start-Sleep 1 }
+          Start-Sleep 2
+          Get-Content "$data\ps3-xmb.log"
+          Copy-Item "$data\ps3-xmb.log" .
+          if (-not (Test-Path snapshot.png)) { throw "no frame rendered" }
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ps3-xmb-windows-test
+          path: |
+            snapshot.png
+            ps3-xmb.log
       - name: Installer
         shell: pwsh
         run: |

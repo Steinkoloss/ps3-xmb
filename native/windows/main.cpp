@@ -3,7 +3,9 @@
 // behind the desktop icons on Windows (the WorkerW layer that Explorer paints the wallpaper
 // in), with a tray icon. On first start it imports the renderer's data from Sony's PS3 system
 // software (downloaded from Sony unless a PS3UPDAT.PUP is given) with the bundled Python.
-//   ps3-xmb [--window] [--import PS3UPDAT.PUP] [--snapshot frame.png]
+//   ps3-xmb [--window] [--import PS3UPDAT.PUP] [--snapshot frame.png] [--software-gl]
+// Without OpenGL 4.3 from the graphics driver (virtual machines, old GPUs) it restarts itself
+// on the bundled software renderer (opengl32sw.dll).
 #include "OriginalScene.h"
 #include <QApplication>
 #include <QCommandLineParser>
@@ -36,6 +38,7 @@
 #include <QTime>
 #include <QTimer>
 #include <QVBoxLayout>
+#include <cstring>
 #include <memory>
 #ifdef _WIN32
 #include <windows.h>
@@ -45,6 +48,7 @@ namespace {
 QString dataDirectory() {
     return QDir(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation)).filePath("ps3-xmb");
 }
+bool relaunchInSoftware = false;   // set when the driver's OpenGL is too old
 bool imported() { return QFile::exists(QDir(dataDirectory()).filePath("cpu/renderer-image.bin")); }
 double hourNow() { return QTime::currentTime().msecsSinceStartOfDay() / 3.6e6; }
 
@@ -117,6 +121,14 @@ private:
             auto* gl = QOpenGLContext::currentContext()->functions();
             qInfo("OpenGL %s, %s, %s", reinterpret_cast<const char*>(gl->glGetString(GL_VERSION)),
                   reinterpret_cast<const char*>(gl->glGetString(GL_RENDERER)), reinterpret_cast<const char*>(gl->glGetString(GL_VENDOR)));
+            const auto version = context()->format().version();
+            if (version < qMakePair(4, 3) && !QCoreApplication::testAttribute(Qt::AA_UseSoftwareOpenGL) &&
+                QFile::exists(QDir(QCoreApplication::applicationDirPath()).filePath("opengl32sw.dll"))) {
+                qWarning("OpenGL %d.%d is below 4.3: restarting on the software renderer", version.first, version.second);
+                relaunchInSoftware = true;
+                QTimer::singleShot(0, qApp, &QApplication::quit);
+                return;
+            }
             const QDir data(data_);
             scene_ = std::make_unique<OriginalScene>(data.filePath("shaders"), data.filePath("reference"),
                 data.filePath("cpu"), QString(), "clock", unsigned(QDate::currentDate().month()), hourNow());
@@ -281,6 +293,8 @@ int main(int argc, char** argv) {
     format.setSwapInterval(1);
     QSurfaceFormat::setDefaultFormat(format);
     qInstallMessageHandler(logMessage);
+    for (int i = 1; i < argc; ++i)
+        if (!std::strcmp(argv[i], "--software-gl")) QCoreApplication::setAttribute(Qt::AA_UseSoftwareOpenGL);
     QApplication application(argc, argv);
     application.setApplicationName("PS3 XMB");
     qInfo("PS3 XMB starting (%s)", qPrintable(QSysInfo::prettyProductName()));
@@ -290,7 +304,8 @@ int main(int argc, char** argv) {
     parser.addHelpOption();
     parser.addOptions({{"window", "Show in a normal window instead of behind the desktop icons"},
                        {"import", "Import from this PS3UPDAT.PUP instead of downloading", "file"},
-                       {"snapshot", "Testing: save the 300th frame to this PNG file and quit", "file"}});
+                       {"snapshot", "Testing: save the 300th frame to this PNG file and quit", "file"},
+                       {"software-gl", "Draw with the bundled software OpenGL renderer"}});
     parser.process(application);
 
     QLockFile lock(QDir(QDir::tempPath()).filePath("ps3-xmb.lock"));
@@ -313,9 +328,14 @@ int main(int argc, char** argv) {
         wallpaper.show();
         if (layer.iconView)
             SetWindowPos(HWND(wallpaper.winId()), layer.iconView, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        wchar_t parent[64] = {};
+        GetClassNameW(GetParent(HWND(wallpaper.winId())), parent, 64);
+        qInfo("Behind the desktop icons: parent %ls%s, %dx%d", parent, layer.iconView ? " (below the icon view)" : "",
+              desktop.width(), desktop.height());
     } else
 #endif
     {
+        if (!parser.isSet("window")) qWarning("No desktop layer found: showing a normal window");
         wallpaper.setTitle("PS3 XMB");
         wallpaper.resize(parser.isSet("window") ? QSize(1280, 720) : desktop.size());
         wallpaper.show();
@@ -337,12 +357,24 @@ int main(int argc, char** argv) {
     QObject::connect(quit, &QAction::triggered, &application, &QApplication::quit);
     // Paused by hand, or while a fullscreen app (a game, a video) is in front.
     QTimer watch;
-    QObject::connect(&watch, &QTimer::timeout, [&] { wallpaper.setPaused(pause->isChecked() || fullscreenAppInFront()); });
-    QObject::connect(pause, &QAction::toggled, [&] { wallpaper.setPaused(pause->isChecked() || fullscreenAppInFront()); });
+    const auto follow = [&] {
+        const bool paused = pause->isChecked() || fullscreenAppInFront();
+        if (paused != wallpaper.paused()) qInfo(paused ? "Paused" : "Running");
+        wallpaper.setPaused(paused);
+    };
+    QObject::connect(&watch, &QTimer::timeout, follow);
+    QObject::connect(pause, &QAction::toggled, follow);
     watch.start(1000);
 
     const int result = application.exec();
     wallpaper.destroy();
     restoreDesktop();
+    if (relaunchInSoftware) {
+        lock.unlock();
+        QStringList arguments = QCoreApplication::arguments().mid(1);
+        arguments << "--software-gl";
+        QProcess::startDetached(QCoreApplication::applicationFilePath(), arguments);
+        return 0;
+    }
     return result;
 }
