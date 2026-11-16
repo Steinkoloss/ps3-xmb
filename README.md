@@ -1,33 +1,44 @@
-# PS3 XMB background
+# PS3 XMB wave background: live wallpaper for Windows and Linux
 
-The PlayStation 3 XMB wave background (firmware 4.93) as a KDE Plasma 6 wallpaper. The
-console's own renderer is reimplemented in native code and runs the original shaders,
-parameters and simulation from your firmware update. Nothing is redrawn by hand and no
-recorded video is played back.
+The animated **PlayStation 3 XMB wave background** (the flowing ribbon and sparkles behind the
+PS3 home menu) as a **live desktop wallpaper** for **Windows 10/11** and **KDE Plasma 6** on
+Linux. It changes colour with the month and with the time of day, exactly like the console.
+
+This is not a video loop or a remake: the PS3's own renderer (firmware 4.93) is reimplemented
+in native code and runs the original shaders, parameters and wave simulation, taken from Sony's
+free PS3 system software when you install. Nothing is redrawn by hand.
+
+**[Download the latest release](https://github.com/Steinkoloss/ps3-xmb/releases/latest)**
 
 ## Install
 
-Download `ps3-xmb-installer.run` from the Releases page and run it:
+### Windows 10/11
+
+Download `PS3-XMB-Setup.exe` from the [latest release](https://github.com/Steinkoloss/ps3-xmb/releases/latest)
+and run it (no administrator rights needed). Windows may say "Windows protected your PC" because
+the installer isn't code-signed: click **More info**, then **Run anyway**. On first start the app
+asks to download Sony's PS3 system software (about 200 MB, from Sony) and takes the renderer's
+data from it, then draws the background behind the desktop icons across all monitors. It pauses
+while a fullscreen app or game is in front and starts with Windows (tray icon: Pause, Start with
+Windows, Quit). It needs a graphics driver with OpenGL 4.3 (any GPU from about 2012 on).
+
+### Linux (KDE Plasma 6)
+
+Download `ps3-xmb-installer.run` from the [latest release](https://github.com/Steinkoloss/ps3-xmb/releases/latest)
+and run it:
 
 ```bash
 sh ps3-xmb-installer.run
 ```
 
-That's it. It needs KDE Plasma 6, `python3` and `openssl` (both preinstalled on most
-desktops). The installer downloads Sony's free PS3 system software update (about 200 MB)
-directly from Sony's update server, takes the renderer's shaders, parameters and textures
-out of it into `~/.local/share/ps3-xmb` (every file checked by SHA-256), deletes the
-download, installs the wallpaper and switches every screen to it. None of Sony's files are
-part of this project. Already have `PS3UPDAT.PUP` (4.93)? `sh ps3-xmb-installer.run
-PS3UPDAT.PUP` uses it instead. Set `PS3_XMB_KEEP_WALLPAPER=1` to install without switching.
+It needs Qt 6.10 or newer, `python3` and `openssl` (preinstalled on most desktops). The
+installer downloads Sony's free PS3 system software update (about 200 MB) directly from Sony,
+takes the renderer's shaders, parameters and textures out of it into `~/.local/share/ps3-xmb`
+(every file checked by SHA-256), deletes the download, installs the wallpaper and switches every
+screen to it. Already have `PS3UPDAT.PUP` (4.93)? `sh ps3-xmb-installer.run PS3UPDAT.PUP` uses
+it instead. Set `PS3_XMB_KEEP_WALLPAPER=1` to install without switching.
 
-### Windows 10/11
-
-Download `PS3-XMB-Setup.exe` from the Releases page and run it (no administrator rights
-needed). On first start the app asks to download Sony's PS3 system software (about 200 MB,
-from Sony) and takes the renderer's data from it, then draws the background behind the
-desktop icons across all monitors. It pauses while a fullscreen app or game is in front and
-starts with Windows (tray icon: Pause, Start with Windows, Quit).
+None of Sony's files are part of this project.
 
 ### From source
 
