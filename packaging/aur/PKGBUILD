@@ -10,7 +10,7 @@ depends=(qt6-base qt6-declarative plasma-workspace python openssl)
 makedepends=(cmake ninja)
 install=ps3-xmb.install
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=(SKIP)
+sha256sums=('99bd5836e794a5849744724629ad0566c9b5ccbc84be4cb6d272d943c95b2adf')
 
 build() {
     cmake -S "$pkgname-$pkgver/native" -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
