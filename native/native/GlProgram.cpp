@@ -1,4 +1,5 @@
 #include "GlProgram.h"
+#include <algorithm>
 #include <QDir>
 #include <QCryptographicHash>
 #include <QFile>
@@ -100,31 +101,44 @@ void GlProgram::initializeConstants(const QJsonObject& metadata, bool vertex) {
     }
 }
 
-void GlProgram::set(const QString& name, const QJsonArray& values, unsigned stages) {
-    if (values.isEmpty() || values.size() > 16) error("Invalid original parameter value: " + name);
-    bool found = false;
+const GlProgram::Bindings& GlProgram::bindings(const QString& name, unsigned stages) {
+    const auto key = std::make_pair(name, stages);
+    if (auto cached = bindings_.find(key); cached != bindings_.end()) return cached->second;
+    Bindings result;
     for (int stage = 0; stage < 2; ++stage) {
         if (!(stages & (1u << stage))) continue;
         const auto& metadata = stage == 0 ? vertexMetadata_ : fragmentMetadata_;
         for (const auto& value : metadata.value("parameters").toArray()) {
             auto parameter = value.toObject();
             if (parameter.value("name").toString() != name) continue;
-            found = true;
+            result.found = true;
             if (stage == 0) {
                 auto index = parameter.value("resource_index").toInt(-1);
-                if (index < 0) continue;
-                if (index * 4 + values.size() > static_cast<int>(vertexConstants_.size())) error("Vertex parameter exceeds bank");
-                for (int i = 0; i < values.size(); ++i) vertexConstants_[index * 4 + i] = static_cast<float>(values[i].toDouble());
+                if (index >= 0) result.vertex.push_back(index);
             } else {
-                for (const auto& patch : parameter.value("constant_offsets").toArray()) {
-                    auto offset = static_cast<size_t>(patch.toInt() / 4);
-                    if (values.size() > 4 || offset + values.size() > fragmentConstants_.size()) error("Fragment parameter exceeds bank");
-                    for (int i = 0; i < values.size(); ++i) fragmentConstants_[offset + i] = static_cast<float>(values[i].toDouble());
-                }
+                for (const auto& patch : parameter.value("constant_offsets").toArray())
+                    result.fragment.push_back(static_cast<size_t>(patch.toInt() / 4));
             }
         }
     }
-    if (!found) error("Unknown original parameter: " + name);
+    return bindings_.emplace(key, std::move(result)).first->second;
+}
+
+void GlProgram::set(const QString& name, const QJsonArray& values, unsigned stages) {
+    if (values.isEmpty() || values.size() > 16) error("Invalid original parameter value: " + name);
+    const auto& found = bindings(name, stages);
+    if (!found.found) error("Unknown original parameter: " + name);
+    float numbers[16];
+    const int count = int(values.size());
+    for (int i = 0; i < count; ++i) numbers[i] = static_cast<float>(values[i].toDouble());
+    for (int index : found.vertex) {
+        if (index * 4 + count > static_cast<int>(vertexConstants_.size())) error("Vertex parameter exceeds bank");
+        std::copy_n(numbers, count, vertexConstants_.begin() + index * 4);
+    }
+    for (size_t offset : found.fragment) {
+        if (count > 4 || offset + count > fragmentConstants_.size()) error("Fragment parameter exceeds bank");
+        std::copy_n(numbers, count, fragmentConstants_.begin() + offset);
+    }
 }
 
 void GlProgram::bind() {

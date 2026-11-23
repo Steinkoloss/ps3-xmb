@@ -2444,8 +2444,18 @@ extern void moyou_rope_func_02087B50(ppu_context*);
 
 namespace {
 struct Lanes { float v[4]; float& operator[](int i) { return v[i]; } float operator[](int i) const { return v[i]; } };
-Lanes loadLanes(uint32_t address) { Lanes l; for (int i = 0; i < 4; ++i) l[i] = readFloat(address + i * 4); return l; }
-void storeLanes(uint32_t address, const Lanes& l) { for (int i = 0; i < 4; ++i) writeFloat(address + i * 4, l[i]); }
+// One permission check per quadword, then plain big-endian words (same as four checked reads).
+Lanes loadLanes(uint32_t address) {
+    check(address, 16);
+    uint32_t w[4]; std::memcpy(w, vm_base + address, 16);
+    Lanes l; for (int i = 0; i < 4; ++i) l[i] = std::bit_cast<float>(__builtin_bswap32(w[i]));
+    return l;
+}
+void storeLanes(uint32_t address, const Lanes& l) {
+    check(address, 16, true);
+    uint32_t w[4]; for (int i = 0; i < 4; ++i) w[i] = __builtin_bswap32(std::bit_cast<uint32_t>(l[i]));
+    std::memcpy(vm_base + address, w, 16);
+}
 Lanes operator+(const Lanes& a, const Lanes& b) { Lanes r; for (int i = 0; i < 4; ++i) r[i] = a[i] + b[i]; return r; }
 Lanes operator-(const Lanes& a, const Lanes& b) { Lanes r; for (int i = 0; i < 4; ++i) r[i] = a[i] - b[i]; return r; }
 Lanes operator*(const Lanes& a, const Lanes& b) { Lanes r; for (int i = 0; i < 4; ++i) r[i] = a[i] * b[i]; return r; }

@@ -2,6 +2,7 @@
 #include "SpuRuntime.h"
 #include "SpuEstimate.h"
 #include <algorithm>
+#include <immintrin.h>
 #include <bit>
 #include <cmath>
 #include <cstdio>
@@ -287,36 +288,44 @@ SurfaceEvaluator::Grid SurfaceEvaluator::projectNative(const Grid& nodes, const 
 // Patches (0x45c0): 16 x 16 bicubic B-spline patches over the 19 x 19 controls, each sampled
 // 8 x 8 at t = k * 16/127; position, then normal = dv x du (unnormalised), then 0.
 SurfaceEvaluator::Mesh SurfaceEvaluator::subdivideNative(const Grid& grid) const {
-    std::array<std::array<float, 4>, 8> b, d;
-    for (unsigned k = 0; k < 8; ++k) { b[k] = basis(float(k) * 16.0f / 127.0f); d[k] = slope(float(k) * 16.0f / 127.0f); }
+    // Same sums in the same order as the scalar form; one SSE register per 4-float vector.
+    alignas(16) float b[8][4], d[8][4];
+    for (unsigned k = 0; k < 8; ++k) {
+        const auto bk = basis(float(k) * 16.0f / 127.0f), dk = slope(float(k) * 16.0f / 127.0f);
+        for (unsigned i = 0; i < 4; ++i) { b[k][i] = bk[i]; d[k][i] = dk[i]; }
+    }
+    __m128 controls[19 * 19];
+    for (unsigned n = 0; n < 19 * 19; ++n) controls[n] = _mm_loadu_ps(grid[n].data());
     Mesh mesh(128 * 128);
     for (unsigned pr = 0; pr < 16; ++pr)
         for (unsigned pc = 0; pc < 16; ++pc) {
             // Along u for each of the four control rows: position and u-derivative.
-            Vector along[8][4], alongSlope[8][4];
+            __m128 along[8][4], alongSlope[8][4];
             for (unsigned x = 0; x < 8; ++x)
                 for (unsigned r = 0; r < 4; ++r) {
-                    Vector p{}, s{};
+                    __m128 p = _mm_setzero_ps(), s = _mm_setzero_ps();
                     for (unsigned i = 0; i < 4; ++i) {
-                        const auto& control = grid[(pr + r) * 19 + pc + i];
-                        for (unsigned c = 0; c < 4; ++c) { p[c] += b[x][i] * control[c]; s[c] += d[x][i] * control[c]; }
+                        const __m128 control = controls[(pr + r) * 19 + pc + i];
+                        p = _mm_add_ps(p, _mm_mul_ps(_mm_set1_ps(b[x][i]), control));
+                        s = _mm_add_ps(s, _mm_mul_ps(_mm_set1_ps(d[x][i]), control));
                     }
                     along[x][r] = p; alongSlope[x][r] = s;
                 }
             for (unsigned y = 0; y < 8; ++y)
                 for (unsigned x = 0; x < 8; ++x) {
-                    Vector p{}, du{}, dv{};
-                    for (unsigned r = 0; r < 4; ++r)
-                        for (unsigned c = 0; c < 4; ++c) {
-                            p[c] += b[y][r] * along[x][r][c];
-                            du[c] += b[y][r] * alongSlope[x][r][c];
-                            dv[c] += d[y][r] * along[x][r][c];
-                        }
+                    __m128 p = _mm_setzero_ps(), du = _mm_setzero_ps(), dv = _mm_setzero_ps();
+                    for (unsigned r = 0; r < 4; ++r) {
+                        p = _mm_add_ps(p, _mm_mul_ps(_mm_set1_ps(b[y][r]), along[x][r]));
+                        du = _mm_add_ps(du, _mm_mul_ps(_mm_set1_ps(b[y][r]), alongSlope[x][r]));
+                        dv = _mm_add_ps(dv, _mm_mul_ps(_mm_set1_ps(d[y][r]), along[x][r]));
+                    }
+                    alignas(16) float P[4], U[4], V[4];
+                    _mm_store_ps(P, p); _mm_store_ps(U, du); _mm_store_ps(V, dv);
                     auto& vertex = mesh[(pr * 8 + y) * 128 + pc * 8 + x];
-                    for (unsigned c = 0; c < 4; ++c) vertex[c] = p[c];
-                    vertex[4] = dv[1] * du[2] - dv[2] * du[1];
-                    vertex[5] = dv[2] * du[0] - dv[0] * du[2];
-                    vertex[6] = dv[0] * du[1] - dv[1] * du[0];
+                    for (unsigned c = 0; c < 4; ++c) vertex[c] = P[c];
+                    vertex[4] = V[1] * U[2] - V[2] * U[1];
+                    vertex[5] = V[2] * U[0] - V[0] * U[2];
+                    vertex[6] = V[0] * U[1] - V[1] * U[0];
                     vertex[7] = 0;
                 }
         }
@@ -325,7 +334,11 @@ SurfaceEvaluator::Mesh SurfaceEvaluator::subdivideNative(const Grid& grid) const
 
 namespace {
 template <class Values> void requireFinite(const Values& values, const char* message) {
-    for (const auto& value : values) for (float c : value) if (!std::isfinite(c)) throw std::runtime_error(message);
+    // Branch-free so it vectorizes: any lane with an all-ones exponent is inf or NaN.
+    uint32_t special = 0;
+    for (const auto& value : values)
+        for (float c : value) special |= uint32_t((std::bit_cast<uint32_t>(c) & 0x7f800000u) == 0x7f800000u);
+    if (special) throw std::runtime_error(message);
 }
 }
 

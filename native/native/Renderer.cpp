@@ -148,8 +148,9 @@ void Renderer::bindMesh(const QString& path) {
 }
 
 void Renderer::mesh(const std::vector<float>& vertices) {
+    // Live meshes come from SurfaceEvaluator, which rejects non-finite results; captures are
+    // checked where they are read.
     if (vertices.size() != 128 * 128 * 9) error("Wrong-sized original surface mesh");
-    for (float value : vertices) if (!std::isfinite(value)) error("Non-finite original mesh coordinate");
     glBindBuffer(GL_ARRAY_BUFFER, meshVertices_);
     glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(vertices.size() * sizeof(float)), vertices.data(), GL_STREAM_DRAW);
     if (indexCount_) return;

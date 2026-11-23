@@ -2,6 +2,7 @@
 #include "DesktopLayout.h"
 #include <QTime>
 #include "OriginalScene.h"
+#include "LocalClock.h"
 #include <QCursor>
 #include <QDateTime>
 #include <QDir>
@@ -141,7 +142,7 @@ private:
                 throw std::runtime_error("Cannot create the simulation OpenGL context");
             const double fixed = hour_;
             OriginalSimulation simulation(channel_->shaders,channel_->reference,cpu,spline,channel_->preset,
-                fixed >= 0 ? fixed : QTime::currentTime().msecsSinceStartOfDay() / 3.6e6);
+                fixed >= 0 ? fixed : LocalClock::hour());
             { std::lock_guard lock(channel_->mutex); channel_->constants = simulation.constants(); }
             updateItems();
             using Clock = std::chrono::steady_clock;
@@ -161,7 +162,7 @@ private:
                 SceneFrame scene;
                 { std::lock_guard lock(canvasMutex_); scene = scene_; }
                 const double fixed = hour_;
-                simulation.setHour(fixed >= 0 ? fixed : QTime::currentTime().msecsSinceStartOfDay() / 3.6e6);
+                simulation.setHour(fixed >= 0 ? fixed : LocalClock::hour());
                 {
                     std::optional<QPointF> pointer;
                     { std::lock_guard lock(items_); for (const auto& [item, state] : subscribers_) if (state.pointer) pointer = state.pointer; }
@@ -259,9 +260,8 @@ public:
     }
 private:
     bool draw(QSize size) {
-        const auto now = QDateTime::currentDateTime();
-        const unsigned month = month_ > 0 ? unsigned(month_) : unsigned(now.date().month());
-        const double hour = hour_ >= 0 ? hour_ : now.time().msecsSinceStartOfDay() / 3.6e6;
+        const unsigned month = month_ > 0 ? unsigned(month_) : LocalClock::month();
+        const double hour = hour_ >= 0 ? hour_ : LocalClock::hour();
         std::shared_ptr<const OriginalSimulation::Frame> frame;
         SceneFrame scene;
         uint64_t id;

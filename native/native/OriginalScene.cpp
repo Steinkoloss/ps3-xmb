@@ -1,4 +1,5 @@
 #include "OriginalScene.h"
+#include "LocalClock.h"
 #include <QDir>
 #include <QFile>
 #include <QJsonArray>
@@ -23,8 +24,7 @@ namespace {
 double presetHour(const QString& preset, double hour) {
     if (!std::isfinite(hour) || hour > 24) throw std::runtime_error("Invalid original background time");
     if (hour < 0 && preset == "clock") {
-        const auto now = QTime::currentTime();
-        return now.msecsSinceStartOfDay() / 3.6e6;
+        return LocalClock::hour();
     }
     if (hour < 0) hour = preset == "day" ? 12 : preset == "yoake" ? 6 : preset == "higure" ? 18 : 0;
     return hour;

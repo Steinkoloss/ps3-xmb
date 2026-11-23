@@ -25,6 +25,10 @@ public:
     const std::map<GLuint, GLenum>& samplers() const { return samplers_; }
 private:
     void initializeConstants(const QJsonObject& metadata, bool vertex);
+    // Constant-bank locations of one parameter name for one stage mask (resolved once).
+    struct Bindings { bool found = false; std::vector<int> vertex; std::vector<size_t> fragment; };
+    const Bindings& bindings(const QString& name, unsigned stages);
+    std::map<std::pair<QString, unsigned>, Bindings> bindings_;
     QOpenGLFunctions_4_3_Core& gl_;
     QOpenGLShaderProgram program_;
     QJsonObject vertexMetadata_, fragmentMetadata_;
