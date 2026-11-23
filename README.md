@@ -6,7 +6,8 @@ Linux. It changes colour with the month and with the time of day, exactly like t
 
 This is not a video loop or a remake: the PS3's own renderer (firmware 4.93) is reimplemented
 in native code and runs the original shaders, parameters and wave simulation, taken from Sony's
-free PS3 system software when you install. Nothing is redrawn by hand.
+free PS3 system software when you install. Nothing is redrawn by hand. It is light on the CPU:
+about a quarter of one core for two screens (1440p + 1080p) at 60 fps on a Ryzen 7 5700X3D.
 
 **[Download the latest release](https://github.com/Steinkoloss/ps3-xmb/releases/latest)**
 
