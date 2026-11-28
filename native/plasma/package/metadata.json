@@ -5,7 +5,7 @@
         "Id": "org.ps3xmb.waves",
         "License": "GPL-2.0-or-later",
         "Name": "PS3 XMB Waves",
-        "Version": "0.3.0"
+        "Version": "0.3.1"
     },
     "X-Plasma-API-Minimum-Version": "6.0"
 }
