@@ -127,21 +127,32 @@ void logDesktop(HWND ours) {
     describe(ours);
 }
 // A foreground window covering its whole monitor (a game, a video): pause to leave it the GPU.
-bool fullscreenAppInFront() {
+// The desktop itself (Progman, WorkerW and their children, which includes our window) is not.
+bool fullscreenAppInFront(WId own) {
     HWND front = GetForegroundWindow();
-    if (!front || front == GetShellWindow()) return false;
+    if (!front || front == GetShellWindow() || front == HWND(own)) return false;
+    HWND root = GetAncestor(front, GA_ROOT);
     wchar_t name[64] = {};
-    GetClassNameW(front, name, 64);
+    GetClassNameW(root ? root : front, name, 64);
     if (!wcscmp(name, L"Progman") || !wcscmp(name, L"WorkerW")) return false;
     RECT window;
     MONITORINFO monitor{sizeof monitor};
     if (!GetWindowRect(front, &window) || !GetMonitorInfoW(MonitorFromWindow(front, MONITOR_DEFAULTTONEAREST), &monitor))
         return false;
-    return window.left <= monitor.rcMonitor.left && window.top <= monitor.rcMonitor.top &&
-           window.right >= monitor.rcMonitor.right && window.bottom >= monitor.rcMonitor.bottom;
+    const bool covers = window.left <= monitor.rcMonitor.left && window.top <= monitor.rcMonitor.top &&
+                        window.right >= monitor.rcMonitor.right && window.bottom >= monitor.rcMonitor.bottom;
+    static HWND reported = nullptr;
+    if (covers && front != reported) {   // for reports: which window paused the wallpaper
+        reported = front;
+        wchar_t frontName[64] = {}, title[128] = {};
+        GetClassNameW(front, frontName, 64);
+        GetWindowTextW(front, title, 128);
+        qInfo("Fullscreen window in front: %ls \"%ls\"", frontName, title);
+    }
+    return covers;
 }
 #else
-bool fullscreenAppInFront() { return false; }
+bool fullscreenAppInFront(WId) { return false; }
 #endif
 
 QRect virtualDesktop() {
@@ -503,7 +514,7 @@ int main(int argc, char** argv) {
     // Paused by hand, or while a fullscreen app (a game, a video) is in front.
     QTimer watch;
     const auto follow = [&] {
-        const bool paused = pause->isChecked() || fullscreenAppInFront();
+        const bool paused = pause->isChecked() || fullscreenAppInFront(wallpaper.winId());
         if (paused != wallpaper.paused()) qInfo(paused ? "Paused" : "Running");
         wallpaper.setPaused(paused);
     };
