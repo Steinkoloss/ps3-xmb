@@ -6,6 +6,7 @@
 //   ps3-xmb [--window] [--import PS3UPDAT.PUP] [--snapshot frame.png]
 // It needs OpenGL 4.3 from the graphics driver and says so when the driver has less.
 #include "OriginalScene.h"
+#include <QActionGroup>
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QCursor>
@@ -18,6 +19,7 @@
 #include <QFileDialog>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLocale>
 #include <QLockFile>
 #include <QMenu>
 #include <QMessageBox>
@@ -81,14 +83,19 @@ LONG WINAPI logCrash(EXCEPTION_POINTERS* info) {
 }
 // The window Explorer paints the wallpaper in, behind the icons. Asking Progman for 0x052C
 // makes Explorer create it. Before Windows 11 24H2 it is a top-level WorkerW after the one that
-// holds SHELLDLL_DefView; since 24H2 it is a WorkerW child of Progman, and our window goes
-// into Progman just behind the icon view.
-struct DesktopLayer { HWND parent = nullptr, iconView = nullptr; };
+// holds SHELLDLL_DefView. Since 24H2 the desktop is "raised": Progman (created with
+// WS_EX_NOREDIRECTIONBITMAP) holds SHELLDLL_DefView and a WorkerW child; our window goes into
+// Progman just behind the icon view, above that WorkerW, and must be a layered child to be
+// composited at all (as Lively Wallpaper does).
+struct DesktopLayer { HWND parent = nullptr, iconView = nullptr, worker = nullptr; bool raised = false; };
 DesktopLayer desktopLayer() {
     HWND progman = FindWindowW(L"Progman", nullptr);
     if (!progman) return {};
     SendMessageTimeoutW(progman, 0x052C, 0xD, 0x1, SMTO_NORMAL, 1000, nullptr);
     SendMessageTimeoutW(progman, 0x052C, 0, 0, SMTO_NORMAL, 1000, nullptr);
+    if (GetWindowLongPtrW(progman, GWL_EXSTYLE) & WS_EX_NOREDIRECTIONBITMAP)
+        return {progman, FindWindowExW(progman, nullptr, L"SHELLDLL_DefView", nullptr),
+                FindWindowExW(progman, nullptr, L"WorkerW", nullptr), true};
     HWND worker = nullptr;
     EnumWindows([](HWND top, LPARAM result) -> BOOL {
         if (FindWindowExW(top, nullptr, L"SHELLDLL_DefView", nullptr))
@@ -97,6 +104,27 @@ DesktopLayer desktopLayer() {
     }, reinterpret_cast<LPARAM>(&worker));
     if (worker) return {worker, nullptr};
     return {progman, FindWindowExW(progman, nullptr, L"SHELLDLL_DefView", nullptr)};
+}
+// For problem reports: Progman, its children (in z-order) and our window.
+void logDesktop(HWND ours) {
+    const auto describe = [](HWND window) {
+        wchar_t name[64] = {};
+        GetClassNameW(window, name, 64);
+        RECT r{};
+        GetWindowRect(window, &r);
+        qInfo("  %ls %p: %s, style %08llx ex %08llx, %ld,%ld %ldx%ld", name, static_cast<void*>(window),
+              IsWindowVisible(window) ? "visible" : "hidden",
+              static_cast<unsigned long long>(GetWindowLongPtrW(window, GWL_STYLE)),
+              static_cast<unsigned long long>(GetWindowLongPtrW(window, GWL_EXSTYLE)),
+              r.left, r.top, r.right - r.left, r.bottom - r.top);
+    };
+    qInfo("Desktop windows:");
+    if (HWND progman = FindWindowW(L"Progman", nullptr)) {
+        describe(progman);
+        for (HWND child = GetWindow(progman, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT)) describe(child);
+    }
+    qInfo("Ours:");
+    describe(ours);
 }
 // A foreground window covering its whole monitor (a game, a video): pause to leave it the GPU.
 bool fullscreenAppInFront() {
@@ -132,6 +160,10 @@ public:
         if (!paused_) { clock_.restart(); update(); }
     }
     bool paused() const { return paused_; }
+    // The cursor nudging the flakes (not on the console) and a fixed month (1-12, 0 follows the
+    // calendar) or hour (0-24, negative follows the clock).
+    void setCursorPush(bool on) { cursorPush_ = on; }
+    void setTime(int month, double hour) { month_ = month; hour_ = hour; minutes_.invalidate(); update(); }
 private:
     bool event(QEvent* event) override {
         switch (event->type()) {
@@ -147,7 +179,8 @@ private:
         try {
             const QDir data(data_);
             scene_ = std::make_unique<OriginalScene>(data.filePath("shaders"), data.filePath("reference"),
-                data.filePath("cpu"), QString(), "clock", unsigned(QDate::currentDate().month()), hourNow());
+                data.filePath("cpu"), QString(), "clock", month_ > 0 ? unsigned(month_) : unsigned(QDate::currentDate().month()),
+                hour_ >= 0 ? hour_ : hourNow());
             clock_.start();
         } catch (const std::exception& error) {
             qCritical("Could not start: %s", error.what());
@@ -159,12 +192,11 @@ private:
         if (!scene_) return;
         try {
             if (!minutes_.isValid() || minutes_.elapsed() >= 60000) {   // follow the clock and month
-                scene_->setTime(unsigned(QDate::currentDate().month()), hourNow());
+                scene_->setTime(month_ > 0 ? unsigned(month_) : unsigned(QDate::currentDate().month()), hour_ >= 0 ? hour_ : hourNow());
                 minutes_.start();
             }
-            // The cursor pushes the flakes, as on the console's controller.
             const QPoint cursor = mapFromGlobal(QCursor::pos());
-            if (QRect(QPoint(), size()).contains(cursor))
+            if (cursorPush_ && QRect(QPoint(), size()).contains(cursor))
                 scene_->setPointer(std::array<float,2>{2.0f * cursor.x() / width() - 1, 1 - 2.0f * cursor.y() / height()});
             else scene_->setPointer(std::nullopt);
             QElapsedTimer work;
@@ -199,7 +231,9 @@ private:
     unsigned frames_ = 0;
     std::unique_ptr<OriginalScene> scene_;
     QElapsedTimer clock_, minutes_;
-    bool paused_ = false;
+    bool paused_ = false, cursorPush_ = true;
+    int month_ = 0;
+    double hour_ = -1;
 };
 
 // First start: take the renderer's data from Sony's PS3 system software with the bundled
@@ -380,15 +414,34 @@ int main(int argc, char** argv) {
     const auto layer = parser.isSet("window") ? DesktopLayer{} : desktopLayer();
     if (layer.parent) {
         wallpaper.setFlags(Qt::FramelessWindowHint);
+        if (layer.raised) {
+            // A layered child before it is parented (DWM composites it under Progman's
+            // NOREDIRECTIONBITMAP surface only then).
+            wallpaper.create();
+            HWND own = HWND(wallpaper.winId());
+            SetWindowLongPtrW(own, GWL_EXSTYLE, GetWindowLongPtrW(own, GWL_EXSTYLE) | WS_EX_LAYERED);
+            SetLayeredWindowAttributes(own, 0, 255, LWA_ALPHA);
+        }
         wallpaper.setParent(QWindow::fromWinId(WId(layer.parent)));
         wallpaper.setGeometry(0, 0, desktop.width(), desktop.height());
         wallpaper.show();
+        HWND own = HWND(wallpaper.winId());
+        if (layer.raised && !(GetWindowLongPtrW(own, GWL_EXSTYLE) & WS_EX_LAYERED)) {
+            SetWindowLongPtrW(own, GWL_EXSTYLE, GetWindowLongPtrW(own, GWL_EXSTYLE) | WS_EX_LAYERED);
+            SetLayeredWindowAttributes(own, 0, 255, LWA_ALPHA);
+        }
+        // Progman's client area starts at the virtual screen's corner.
+        SetWindowPos(own, nullptr, 0, 0, GetSystemMetrics(SM_CXVIRTUALSCREEN), GetSystemMetrics(SM_CYVIRTUALSCREEN),
+                     SWP_NOZORDER | SWP_NOACTIVATE);
         if (layer.iconView)
-            SetWindowPos(HWND(wallpaper.winId()), layer.iconView, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            SetWindowPos(own, layer.iconView, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        if (layer.worker && GetWindow(layer.parent, GW_CHILD) && GetWindow(GetWindow(layer.parent, GW_CHILD), GW_HWNDLAST) != layer.worker)
+            SetWindowPos(layer.worker, HWND_BOTTOM, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        logDesktop(own);
         wchar_t parent[64] = {};
         GetClassNameW(GetParent(HWND(wallpaper.winId())), parent, 64);
-        qInfo("Behind the desktop icons: parent %ls%s, %dx%d", parent, layer.iconView ? " (below the icon view)" : "",
-              desktop.width(), desktop.height());
+        qInfo("Behind the desktop icons: parent %ls%s%s, %dx%d", parent, layer.raised ? " (raised desktop)" : "",
+              layer.iconView ? " (below the icon view)" : "", desktop.width(), desktop.height());
     } else
 #endif
     {
@@ -403,6 +456,37 @@ int main(int argc, char** argv) {
     QMenu menu;
     auto* pause = menu.addAction("Pause");
     pause->setCheckable(true);
+    // Options, kept between starts (HKCU\Software\PS3 XMB).
+    QSettings options("PS3 XMB", "PS3 XMB");
+    auto* cursor = menu.addAction("Cursor moves the sparkles");
+    cursor->setCheckable(true);
+    cursor->setChecked(options.value("Cursor", true).toBool());
+    wallpaper.setCursorPush(cursor->isChecked());
+    QObject::connect(cursor, &QAction::toggled, [&](bool on) { options.setValue("Cursor", on); wallpaper.setCursorPush(on); });
+    auto* monthMenu = menu.addMenu("Month colour");
+    auto* hourMenu = menu.addMenu("Time of day");
+    auto* months = new QActionGroup(monthMenu);
+    auto* hours = new QActionGroup(hourMenu);
+    const auto applyTime = [&] { wallpaper.setTime(options.value("Month", 0).toInt(), options.value("Hour", -1.0).toDouble()); };
+    for (int m = 0; m <= 12; ++m) {
+        auto* action = monthMenu->addAction(m ? QLocale().standaloneMonthName(m) : QString("Follow the calendar"));
+        action->setCheckable(true);
+        action->setChecked(options.value("Month", 0).toInt() == m);
+        months->addAction(action);
+        QObject::connect(action, &QAction::triggered, [&, m] { options.setValue("Month", m); applyTime(); });
+        if (!m) monthMenu->addSeparator();
+    }
+    const std::pair<const char*, double> times[] = {{"Follow the clock", -1}, {"Night (0:00)", 0}, {"Dawn (6:00)", 6},
+        {"Morning (9:00)", 9}, {"Day (12:00)", 12}, {"Afternoon (15:00)", 15}, {"Dusk (18:00)", 18}, {"Evening (21:00)", 21}};
+    for (const auto& [label, hour] : times) {
+        auto* action = hourMenu->addAction(label);
+        action->setCheckable(true);
+        action->setChecked(options.value("Hour", -1.0).toDouble() == hour);
+        hours->addAction(action);
+        QObject::connect(action, &QAction::triggered, [&, hour] { options.setValue("Hour", hour); applyTime(); });
+        if (hour < 0) hourMenu->addSeparator();
+    }
+    applyTime();
     auto* autostart = menu.addAction("Start with Windows");
     autostart->setCheckable(true);
     autostart->setChecked(startsWithWindows());

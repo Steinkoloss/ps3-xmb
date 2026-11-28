@@ -412,6 +412,7 @@ void XmbItem::samplePointer() {
     if (!simulator_ || !window()) return;
     const QPointF local = mapFromGlobal(QCursor::pos(window()->screen()));
     std::optional<QPointF> pointer;
+    if (!cursor_) { simulator_->setPointer(this,pointer); return; }
     const auto area = desktopArea();
     if (!area.isEmpty() && QRectF(QPointF(),size()).contains(local) && width() > 0)
         pointer = area.topLeft() + QPointF(local.x() / width() * area.width(),local.y() / height() * area.height());

@@ -30,6 +30,8 @@ class XmbItem : public QQuickFramebufferObject {
     // Multi-screen scene axis: "auto" (snap to level/upright within 20 degrees), "level" or "exact".
     // One simulation serves every screen, so the last screen to set it decides.
     Q_PROPERTY(QString sceneAxis READ sceneAxis WRITE setSceneAxis NOTIFY sceneAxisChanged)
+    // The cursor nudging the flakes and the weave (not on the console).
+    Q_PROPERTY(bool cursor READ cursor WRITE setCursor NOTIFY cursorChanged)
     Q_PROPERTY(QString error READ error NOTIFY errorChanged)
 public:
     explicit XmbItem(QQuickItem* parent = nullptr);
@@ -50,6 +52,8 @@ public:
     bool glints() const { return glints_; }
     void setGlints(bool enabled);
     QString sceneAxis() const { return sceneAxis_; }
+    bool cursor() const { return cursor_; }
+    void setCursor(bool enabled) { if (enabled == cursor_) return; cursor_ = enabled; emit cursorChanged(); }
     void setSceneAxis(const QString& mode);
     void setFrameRate(int rate);
     QString error() const { return error_; }
@@ -64,6 +68,7 @@ signals:
     void frameRateChanged();
     void glintsChanged();
     void sceneAxisChanged();
+    void cursorChanged();
     void errorChanged();
 protected:
     void componentComplete() override;
@@ -84,6 +89,7 @@ private:
     int frameRate_ = 60;
     bool glints_ = true;
     QString sceneAxis_ = QStringLiteral("auto");
+    bool cursor_ = true;
     int retryDelay_ = 2;
     std::shared_ptr<XmbSimulator> simulator_;
 };

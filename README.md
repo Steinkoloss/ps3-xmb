@@ -20,8 +20,9 @@ and run it (no administrator rights needed). Windows may say "Windows protected 
 the installer isn't code-signed: click **More info**, then **Run anyway**. On first start the app
 asks to download Sony's PS3 system software (about 200 MB, from Sony) and takes the renderer's
 data from it, then draws the background behind the desktop icons across all monitors. It pauses
-while a fullscreen app or game is in front and starts with Windows (tray icon: Pause, Start with
-Windows, Quit). It needs a graphics driver with OpenGL 4.3 (any GPU from about 2012 on).
+while a fullscreen app or game is in front and starts with Windows. The tray icon has Pause, Cursor
+moves the sparkles (off matches the console), a fixed Month colour or Time of day, Start with
+Windows and Quit. It needs a graphics driver with OpenGL 4.3 (any GPU from about 2012 on).
 
 ### Linux (KDE Plasma 6)
 

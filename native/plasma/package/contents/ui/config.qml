@@ -10,6 +10,7 @@ Kirigami.FormLayout {
     property string cfg_Preset
     property int cfg_Month
     property string cfg_SceneAxis
+    property alias cfg_Cursor: cursor.checked
     property alias cfg_Hour: hour.value
     property alias cfg_Glints: glints.checked
     property alias formLayout: root
@@ -22,6 +23,7 @@ Kirigami.FormLayout {
         cfg_Hour = XmbSettings.hour
         cfg_Glints = XmbSettings.glints
         cfg_SceneAxis = XmbSettings.sceneAxis
+        cfg_Cursor = XmbSettings.cursor
     }
 
     QQC2.ComboBox {
@@ -48,6 +50,11 @@ Kirigami.FormLayout {
         QQC2.ToolTip.text: ["The weave follows the line between your screens, snapped level or upright when it is within 20°.",
                             "The weave is always horizontal.",
                             "The weave follows the line between your screen centres exactly, even a slight tilt."][currentIndex]
+    }
+    QQC2.CheckBox {
+        id: cursor
+        Kirigami.FormData.label: "Cursor:"
+        text: "Moves the sparkles (not on the real console)"
     }
     QQC2.CheckBox {
         id: glints

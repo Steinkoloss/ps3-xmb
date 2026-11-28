@@ -10,13 +10,15 @@ WallpaperItem {
     // first screen to start seeds the shared settings from its own.
     property bool ready: false
     readonly property var configured: [root.configuration.Preset, root.configuration.Month, root.configuration.Hour,
-                                       root.configuration.Glints, root.configuration.SceneAxis]
+                                       root.configuration.Glints, root.configuration.SceneAxis,
+                                       root.configuration.Cursor]
     function share() {
         XmbSettings.preset = root.configuration.Preset || "clock"
         XmbSettings.month = root.configuration.Month
         XmbSettings.hour = root.configuration.Hour
         XmbSettings.glints = root.configuration.Glints
         XmbSettings.sceneAxis = root.configuration.SceneAxis || "auto"
+        XmbSettings.cursor = root.configuration.Cursor
     }
     onConfiguredChanged: if (ready) share()
     Component.onCompleted: {
@@ -31,5 +33,6 @@ WallpaperItem {
         hour: XmbSettings.hour
         glints: XmbSettings.glints
         sceneAxis: XmbSettings.sceneAxis
+        cursor: XmbSettings.cursor
     }
 }

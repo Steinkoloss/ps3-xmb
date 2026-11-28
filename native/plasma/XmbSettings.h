@@ -15,6 +15,7 @@ class XmbSettings : public QObject {
     Q_PROPERTY(int hour READ hour WRITE setHour NOTIFY changed)
     Q_PROPERTY(bool glints READ glints WRITE setGlints NOTIFY changed)
     Q_PROPERTY(QString sceneAxis READ sceneAxis WRITE setSceneAxis NOTIFY changed)
+    Q_PROPERTY(bool cursor READ cursor WRITE setCursor NOTIFY changed)
     // False until something has been stored; the first screen then seeds it from its own settings.
     Q_PROPERTY(bool stored READ stored NOTIFY changed)
 public:
@@ -24,12 +25,14 @@ public:
     int hour() const { return value("Hour", -1).toInt(); }
     bool glints() const { return value("Glints", true).toBool(); }
     QString sceneAxis() const { return value("SceneAxis", QStringLiteral("auto")).toString(); }
+    bool cursor() const { return value("Cursor", true).toBool(); }
     bool stored() const;
     void setPreset(const QString& v) { set("Preset", v); }
     void setMonth(int v) { set("Month", v); }
     void setHour(int v) { set("Hour", v); }
     void setGlints(bool v) { set("Glints", v); }
     void setSceneAxis(const QString& v) { set("SceneAxis", v); }
+    void setCursor(bool v) { set("Cursor", v); }
 signals:
     void changed();
 private:
